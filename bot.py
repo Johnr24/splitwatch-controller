@@ -134,6 +134,124 @@ async def call_ha_service(domain: str, service: str, target_entity_id: Optional[
         logger.error(f"An unexpected error occurred while calling HA service {service_url}: {e}")
 
 
+# --- Home Assistant MQTT Discovery ---
+async def publish_ha_discovery():
+    """Publishes MQTT discovery messages for HA entities."""
+    if not HA_MQTT_DISCOVERY_ENABLED or not mqtt_handler:
+        logger.info("HA MQTT Discovery is disabled or MQTT handler not ready.")
+        return
+
+    logger.info("Publishing Home Assistant MQTT Discovery messages...")
+
+    base_topic = f"{HA_MQTT_DISCOVERY_PREFIX}"
+    node_id = HA_MQTT_NODE_ID
+
+    # Define entities
+    entities = {
+        "status_sensor": {
+            "component": "sensor",
+            "object_id": "status",
+            "config": {
+                "name": "SplitWatch Status",
+                "state_topic": HA_STATUS_STATE_TOPIC,
+                "icon": "mdi:state-machine",
+                "unique_id": f"{node_id}_status",
+                "device": HA_DEVICE_INFO,
+            }
+        },
+        "time_sensor": {
+            "component": "sensor",
+            "object_id": "time",
+            "config": {
+                "name": "SplitWatch Time",
+                "state_topic": HA_TIME_STATE_TOPIC,
+                "icon": "mdi:timer-outline",
+                "unique_id": f"{node_id}_time",
+                "device": HA_DEVICE_INFO,
+            }
+        },
+        "start_button": {
+            "component": "button",
+            "object_id": "start_resume",
+            "config": {
+                "name": "SplitWatch Start/Resume",
+                "command_topic": HA_COMMAND_TOPIC,
+                "payload_press": CMD_START,
+                "icon": "mdi:play",
+                "unique_id": f"{node_id}_start_resume",
+                "device": HA_DEVICE_INFO,
+            }
+        },
+        "stop_button": {
+            "component": "button",
+            "object_id": "stop_pause",
+            "config": {
+                "name": "SplitWatch Stop/Pause",
+                "command_topic": HA_COMMAND_TOPIC,
+                "payload_press": CMD_STOP,
+                "icon": "mdi:pause",
+                "unique_id": f"{node_id}_stop_pause",
+                "device": HA_DEVICE_INFO,
+            }
+        },
+        "reset_button": {
+            "component": "button",
+            "object_id": "reset",
+            "config": {
+                "name": "SplitWatch Reset",
+                "command_topic": HA_COMMAND_TOPIC,
+                "payload_press": CMD_RESET,
+                "icon": "mdi:stop",
+                "unique_id": f"{node_id}_reset",
+                "device": HA_DEVICE_INFO,
+            }
+        },
+        "split_button": {
+            "component": "button",
+            "object_id": "split",
+            "config": {
+                "name": "SplitWatch Split",
+                "command_topic": HA_COMMAND_TOPIC,
+                "payload_press": CMD_SPLIT,
+                "icon": "mdi:flag-checkered",
+                "unique_id": f"{node_id}_split",
+                "device": HA_DEVICE_INFO,
+            }
+        },
+    }
+
+    # Add power cycle button only if Shelly is configured via REST API
+    if HA_SHELLY_SWITCH_ENTITY_ID:
+         entities["power_cycle_button"] = {
+            "component": "button",
+            "object_id": "power_cycle",
+            "config": {
+                "name": "SplitWatch Power Cycle",
+                "command_topic": HA_COMMAND_TOPIC,
+                "payload_press": CMD_PW_CYCLE,
+                "icon": "mdi:power-cycle",
+                "unique_id": f"{node_id}_power_cycle",
+                "device": HA_DEVICE_INFO,
+            }
+        }
+
+    publish_tasks = []
+    for entity_key, entity_data in entities.items():
+        component = entity_data["component"]
+        object_id = entity_data["object_id"]
+        config_topic = f"{base_topic}/{component}/{node_id}/{object_id}/config"
+        config_payload = json.dumps(entity_data["config"])
+
+        logger.info(f"Publishing config for {entity_key} to {config_topic}")
+        # Publish with retain=True
+        publish_tasks.append(
+            mqtt_handler.publish(config_payload, topic=config_topic, retain=True)
+        )
+
+    await asyncio.gather(*publish_tasks)
+    logger.info("Finished publishing HA MQTT Discovery messages.")
+
+
 # --- Authorization Check ---
 def is_authorized(update: Update) -> bool:
     """Checks if the user sending the update is authorized."""
