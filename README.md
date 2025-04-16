@@ -69,5 +69,3 @@ The bot uses the Home Assistant REST API and a Long-Lived Access Token (LLAT) fo
 
 *   **Automation Control:** When `/sw start` is used, the bot calls the `automation.turn_off` service for the `HA_AUTOMATION_ENTITY_ID`. When `/stop` or `/quit` is used (after a stopwatch run), it calls `automation.turn_on`.
 *   **Shelly Power Cycle:** The `/pw` command calls `switch.turn_off` and `switch.turn_on` services for the `HA_SHELLY_SWITCH_ENTITY_ID`.
-
-Ensure the LLAT you generate has permissions to call these services. 🔑
