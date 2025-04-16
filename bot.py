@@ -29,8 +29,8 @@ DISPLAY_JUSTIFY: str = "center" # Default justification
 AUTHORIZED_USER_IDS: set[int] = set() # Set of authorized user IDs
 # Home Assistant Integration State
 HA_URL: Optional[str] = None # URL for Home Assistant instance
-HA_WEBHOOK_STOPWATCH_START: Optional[str] = None # Webhook ID for stopwatch start
-HA_WEBHOOK_STOPWATCH_STOP: Optional[str] = None # Webhook ID for stopwatch stop/quit
+HA_LLAT: Optional[str] = None # Long-Lived Access Token
+HA_AUTOMATION_ENTITY_ID: Optional[str] = None # Automation to control via API
 HA_SHELLY_SWITCH_ENTITY_ID: Optional[str] = None # Shelly switch control remains MQTT for now
 HA_SHELLY_SWITCH_COMMAND_TOPIC: Optional[str] = None
 initial_blanking_sent: bool = False # Flag to track if initial blanking message was sent
@@ -89,25 +89,38 @@ async def send_initial_blanking_message(): # Make async
     else:
         logger.error("Cannot send initial blanking message: MQTT handler not ready.")
 
-# --- Home Assistant Webhook Trigger ---
-async def trigger_ha_webhook(webhook_id: str):
-    """Sends a POST request to a Home Assistant webhook."""
-    if not HA_URL or not webhook_id:
-        logger.debug("HA_URL or webhook_id not set, skipping webhook trigger.")
+# --- Home Assistant Service Call ---
+async def call_ha_service(domain: str, service: str, entity_id: Optional[str] = None):
+    """Calls a Home Assistant service via the REST API using LLAT."""
+    if not HA_URL or not HA_LLAT:
+        logger.debug("HA_URL or HA_LLAT not set, skipping HA service call.")
+        return
+    if not HA_AUTOMATION_ENTITY_ID: # Check if the target entity is configured
+        logger.debug("HA_AUTOMATION_ENTITY_ID not set, skipping HA service call.")
         return
 
-    webhook_url = f"{HA_URL.rstrip('/')}/api/webhook/{webhook_id}"
+    service_url = f"{HA_URL.rstrip('/')}/api/services/{domain}/{service}"
+    headers = {
+        "Authorization": f"Bearer {HA_LLAT}",
+        "Content-Type": "application/json",
+    }
+    # Use the globally configured entity ID for the payload
+    payload = {"entity_id": HA_AUTOMATION_ENTITY_ID}
+
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.post(webhook_url)
+            logger.info(f"Calling HA service: {domain}.{service} for entity: {HA_AUTOMATION_ENTITY_ID}")
+            response = await client.post(service_url, headers=headers, json=payload)
             response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
-            logger.info(f"Successfully triggered Home Assistant webhook: {webhook_id}")
+            logger.info(f"Successfully called HA service {domain}.{service}. Response: {response.status_code}")
+            # Optionally log response body for debugging (can be large)
+            # logger.debug(f"HA Service Response Body: {response.text}")
     except httpx.RequestError as exc:
-        logger.error(f"Error sending webhook {webhook_id} to {webhook_url}: {exc}")
+        logger.error(f"Error calling HA service {service_url}: {exc}")
     except httpx.HTTPStatusError as exc:
-        logger.error(f"Error response {exc.response.status_code} while sending webhook {webhook_id} to {webhook_url}: {exc.response.text}")
+        logger.error(f"Error response {exc.response.status_code} calling HA service {service_url}: {exc.response.text}")
     except Exception as e:
-        logger.error(f"An unexpected error occurred while triggering webhook {webhook_id}: {e}")
+        logger.error(f"An unexpected error occurred while calling HA service {service_url}: {e}")
 
 
 # --- Authorization Check ---
@@ -172,10 +185,10 @@ async def sw_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await send_initial_blanking_message() # Await async call
         initial_blanking_sent = True
 
-    # --- HA Integration: Trigger Start Webhook ---
-    if HA_WEBHOOK_STOPWATCH_START:
-        logger.info(f"Stopwatch starting. Triggering HA webhook: {HA_WEBHOOK_STOPWATCH_START}")
-        await trigger_ha_webhook(HA_WEBHOOK_STOPWATCH_START)
+    # --- HA Integration: Call turn_off service ---
+    if HA_AUTOMATION_ENTITY_ID: # Check if configured
+        logger.info(f"Stopwatch starting. Calling automation.turn_off for {HA_AUTOMATION_ENTITY_ID}")
+        await call_ha_service("automation", "turn_off")
     # --- End HA Integration ---
 
     if timer:
@@ -270,11 +283,11 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if timer:
         message = timer.stop() # This stops the timer/stopwatch
 
-        # --- HA Integration: Trigger Stop Webhook ---
-        # Trigger the stop webhook only if the timer was actually a stopwatch
-        if was_stopwatch and HA_WEBHOOK_STOPWATCH_STOP:
-            logger.info(f"Stopwatch stopped. Triggering HA webhook: {HA_WEBHOOK_STOPWATCH_STOP}")
-            await trigger_ha_webhook(HA_WEBHOOK_STOPWATCH_STOP)
+        # --- HA Integration: Call turn_on service ---
+        # Call turn_on only if the timer was actually a stopwatch
+        if was_stopwatch and HA_AUTOMATION_ENTITY_ID: # Check if configured
+            logger.info(f"Stopwatch stopped. Calling automation.turn_on for {HA_AUTOMATION_ENTITY_ID}")
+            await call_ha_service("automation", "turn_on")
         # --- End HA Integration ---
 
         await update.message.reply_text(message)
@@ -308,11 +321,11 @@ async def quit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         # Reset the timer first (stops job, clears internal state)
         reset_message = timer.reset() # This also sends 00:00:00 to display via callback
 
-        # --- HA Integration: Trigger Stop Webhook ---
-        # Trigger the stop webhook only if the timer was actually a stopwatch before reset
-        if was_stopwatch and HA_WEBHOOK_STOPWATCH_STOP:
-            logger.info(f"Quit command: Triggering HA webhook: {HA_WEBHOOK_STOPWATCH_STOP}")
-            await trigger_ha_webhook(HA_WEBHOOK_STOPWATCH_STOP)
+        # --- HA Integration: Call turn_on service ---
+        # Call turn_on only if the timer was actually a stopwatch before reset/quit
+        if was_stopwatch and HA_AUTOMATION_ENTITY_ID: # Check if configured
+            logger.info(f"Quit command: Calling automation.turn_on for {HA_AUTOMATION_ENTITY_ID}")
+            await call_ha_service("automation", "turn_on")
         # --- End HA Integration ---
 
         # Explicitly clear the display after quitting
@@ -449,7 +462,7 @@ async def shutdown(signal_num):
 def main() -> None:
     """Start the bot."""
     global mqtt_handler, timer, telegram_app, DISPLAY_WIDTH, DISPLAY_JUSTIFY, AUTHORIZED_USER_IDS
-    global HA_URL, HA_WEBHOOK_STOPWATCH_START, HA_WEBHOOK_STOPWATCH_STOP # Webhook globals
+    global HA_URL, HA_LLAT, HA_AUTOMATION_ENTITY_ID # REST API globals
     global HA_SHELLY_SWITCH_ENTITY_ID, HA_SHELLY_SWITCH_COMMAND_TOPIC # Shelly MQTT globals
 
     # --- Load Environment Variables ---
@@ -495,20 +508,21 @@ def main() -> None:
         logger.warning("AUTHORIZED_USER_IDS is not set in the environment. No users will be authorized.")
         AUTHORIZED_USER_IDS = set()
 
-    # Load HA Webhook config
+    # Load HA REST API config
     HA_URL = os.getenv("HA_URL")
-    HA_WEBHOOK_STOPWATCH_START = os.getenv("HA_WEBHOOK_STOPWATCH_START")
-    HA_WEBHOOK_STOPWATCH_STOP = os.getenv("HA_WEBHOOK_STOPWATCH_STOP")
-    if HA_URL and HA_WEBHOOK_STOPWATCH_START and HA_WEBHOOK_STOPWATCH_STOP:
-        logger.info("HA Webhook Integration Enabled.")
+    HA_LLAT = os.getenv("HA_LLAT")
+    HA_AUTOMATION_ENTITY_ID = os.getenv("HA_AUTOMATION_ENTITY_ID")
+    if HA_URL and HA_LLAT and HA_AUTOMATION_ENTITY_ID:
+        logger.info("HA REST API Integration Enabled.")
         logger.info(f"  HA URL: {HA_URL}")
-        logger.info(f"  Webhook Start: {HA_WEBHOOK_STOPWATCH_START}")
-        logger.info(f"  Webhook Stop: {HA_WEBHOOK_STOPWATCH_STOP}")
+        logger.info(f"  Automation Entity ID: {HA_AUTOMATION_ENTITY_ID}")
+        # Avoid logging the full LLAT for security
+        logger.info(f"  LLAT Loaded: {'Yes' if HA_LLAT else 'No'}")
     else:
-        logger.info("HA Webhook Integration Disabled (HA_URL, HA_WEBHOOK_STOPWATCH_START, or HA_WEBHOOK_STOPWATCH_STOP not set).")
-        HA_URL = None # Ensure it's None if not fully configured
-        HA_WEBHOOK_STOPWATCH_START = None
-        HA_WEBHOOK_STOPWATCH_STOP = None
+        logger.info("HA REST API Integration Disabled (HA_URL, HA_LLAT, or HA_AUTOMATION_ENTITY_ID not set).")
+        HA_URL = None # Ensure all are None if not fully configured
+        HA_LLAT = None
+        HA_AUTOMATION_ENTITY_ID = None
 
     # Load HA Shelly Switch MQTT config
     HA_SHELLY_SWITCH_ENTITY_ID = os.getenv("HA_SHELLY_SWITCH_ENTITY_ID")
