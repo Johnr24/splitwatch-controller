@@ -78,11 +78,10 @@ class Timer:
 
         if self.update_callback:
             try:
-                # Assuming update_callback is synchronous for now
-                # If it needs to be async, this structure needs adjustment
-                self.update_callback(formatted_time)
+                # update_callback (update_display in bot.py) is now async
+                await self.update_callback(formatted_time)
             except Exception as e:
-                logger.error(f"Error in update_callback: {e}")
+                logger.error(f"Error in async update_callback: {e}")
 
         # If timer finished during this tick, self.stop() was called,
         # which already called _stop_timer_job, so no need to check again.

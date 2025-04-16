@@ -1,6 +1,7 @@
 import os
 import paho.mqtt.client as paho_mqtt
 import logging
+import asyncio
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -12,7 +13,7 @@ from typing import Callable, Optional
 class MQTTHandler:
     """Handles MQTT connection and publishing."""
 
-    def __init__(self, broker_address: str, broker_port: int, topic: str, username: Optional[str] = None, password: Optional[str] = None):
+    def __init__(self, broker_address: str, broker_port: int, topic: str, username: Optional[str] = None, password: Optional[str] = None, publish_delay: float = 0.1):
         """
         Initializes the MQTT client.
 
@@ -22,12 +23,15 @@ class MQTTHandler:
             topic: The MQTT topic to publish to.
             username: Optional MQTT username.
             password: Optional MQTT password.
+            publish_delay: Minimum delay between publish commands.
         """
         self.broker_address = broker_address
         self.broker_port = int(broker_port)
         self.topic = topic
         self.username = username
         self.password = password
+        self.publish_delay = publish_delay
+        self.publish_lock = asyncio.Lock() # Lock to serialize publish calls
         # self._on_connect_callback = on_connect_callback # Removed: Blanking is no longer triggered on connect
         self.client = paho_mqtt.Client() # Removed CallbackAPIVersion argument for paho-mqtt v1.x compatibility
         self._message_callbacks = {} # topic -> callback function
@@ -95,9 +99,9 @@ class MQTTHandler:
         self.client.loop_stop() # Stop background thread
         self.client.disconnect()
 
-    def publish(self, payload: str, topic: Optional[str] = None):
+    async def publish(self, payload: str, topic: Optional[str] = None):
         """
-        Publishes a message to an MQTT topic.
+        Publishes a message to an MQTT topic, ensuring a minimum delay between publishes.
 
         Args:
             payload: The message payload to send.
@@ -106,17 +110,23 @@ class MQTTHandler:
         """
         publish_topic = topic if topic is not None else self.topic
         if not publish_topic:
-             logger.error("Cannot publish: No topic specified and no default topic set.")
-             return
+            logger.error("Cannot publish: No topic specified and no default topic set.")
+            return
 
-        if self.client.is_connected():
-            result = self.client.publish(publish_topic, payload)
-            if result.rc == paho_mqtt.MQTT_ERR_SUCCESS:
-                logger.debug(f"Published message to topic '{publish_topic}': {payload}")
+        async with self.publish_lock: # Ensure only one publish runs at a time
+            if self.client.is_connected():
+                result = self.client.publish(publish_topic, payload)
+                # paho-mqtt publish is non-blocking, result is available immediately
+                if result.rc == paho_mqtt.MQTT_ERR_SUCCESS:
+                    logger.debug(f"Published message to topic '{publish_topic}': {payload}")
+                else:
+                    logger.warning(f"Failed to publish message to topic '{publish_topic}'. RC: {result.rc}")
+                # Wait after publishing, before releasing the lock
+                await asyncio.sleep(self.publish_delay)
             else:
-                logger.warning(f"Failed to publish message to topic '{publish_topic}'. RC: {result.rc}")
-        else:
-            logger.warning("MQTT client not connected. Cannot publish message.")
+                logger.warning("MQTT client not connected. Cannot publish message.")
+                # Still wait even if not connected to maintain timing if connection resumes quickly?
+                # Or maybe not? Let's skip the sleep if not connected.
 
     def _subscribe(self, topic: str):
         """Internal helper to subscribe to a topic."""

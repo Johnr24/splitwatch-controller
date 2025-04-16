@@ -52,14 +52,14 @@ HELP_MESSAGE = (
 )
 
 # --- MQTT Update Callback ---
-def update_display(formatted_time: str):
+async def update_display(formatted_time: str): # Make async
     """Callback function passed to the Timer to format and update MQTT."""
     global DISPLAY_WIDTH, DISPLAY_JUSTIFY # Access global config
     if mqtt_handler:
         # Format the time string using the configured width and justification
         payload = format_for_display(formatted_time)
         logger.debug(f"Sending to MQTT: '{payload}' (Justify: {DISPLAY_JUSTIFY}, Width: {DISPLAY_WIDTH})")
-        mqtt_handler.publish(payload)
+        await mqtt_handler.publish(payload) # Await async publish
     else:
         logger.warning("MQTT handler not initialized, cannot update display.")
 
@@ -79,12 +79,12 @@ def format_for_display(text: str) -> str:
         logger.warning(f"Invalid DISPLAY_JUSTIFY value '{DISPLAY_JUSTIFY}'. Defaulting to center.")
         return text.center(width)
 
-def send_initial_blanking_message():
+async def send_initial_blanking_message(): # Make async
     """Sends a blank message to clear the display upon connection."""
     if mqtt_handler:
         blank_message = " " * DISPLAY_WIDTH
         logger.info(f"Sending initial blanking message ({DISPLAY_WIDTH} spaces) to MQTT.")
-        mqtt_handler.publish(blank_message)
+        await mqtt_handler.publish(blank_message) # Await async publish
     else:
         logger.error("Cannot send initial blanking message: MQTT handler not ready.")
 
@@ -161,7 +161,7 @@ async def sw_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Send initial blanking message on first authorized /sw start command
     if not initial_blanking_sent:
-        send_initial_blanking_message()
+        await send_initial_blanking_message() # Await async call
         initial_blanking_sent = True
 
     # --- HA Integration: Turn OFF automation ---
@@ -169,7 +169,7 @@ async def sw_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         # Record current state *before* turning it off
         ha_automation_was_on_before_stopwatch = (ha_automation_last_state == 'on')
         logger.info(f"Stopwatch starting. HA Automation ({HA_AUTOMATION_ENTITY_ID}) was: {'ON' if ha_automation_was_on_before_stopwatch else 'OFF'}. Turning OFF.")
-        mqtt_handler.publish(HA_AUTOMATION_COMMAND_TOPIC, "OFF")
+        await mqtt_handler.publish(HA_AUTOMATION_COMMAND_TOPIC, "OFF") # Await async publish
     # --- End HA Integration ---
 
     if timer:
@@ -232,14 +232,19 @@ async def power_cycle_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         await update.message.reply_text("Attempting power cycle: Turning OFF...")
         logger.info(f"Sending OFF command to Shelly switch: {HA_SHELLY_SWITCH_COMMAND_TOPIC}")
-        mqtt_handler.publish(HA_SHELLY_SWITCH_COMMAND_TOPIC, "OFF")
+        await mqtt_handler.publish(HA_SHELLY_SWITCH_COMMAND_TOPIC, "OFF") # Await async publish
 
+        # The publish method now includes a delay, so this extra sleep might
+        # make the total OFF time longer than 3 seconds (3s + publish_delay).
+        # Consider if the 3s should include the publish delay or be on top of it.
+        # Let's keep it simple for now: the total delay will be 3s + publish_delay.
         await asyncio.sleep(3) # Wait for 3 seconds
 
         await update.message.reply_text("Power cycle: Turning ON...")
         logger.info(f"Sending ON command to Shelly switch: {HA_SHELLY_SWITCH_COMMAND_TOPIC}")
-        mqtt_handler.publish(HA_SHELLY_SWITCH_COMMAND_TOPIC, "ON")
+        await mqtt_handler.publish(HA_SHELLY_SWITCH_COMMAND_TOPIC, "ON") # Await async publish
 
+        # The final message might appear slightly delayed due to the publish delay after ON command.
         await update.message.reply_text("Power cycle sequence initiated.")
         logger.info("Power cycle sequence completed.")
 
@@ -264,7 +269,7 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if was_stopwatch and HA_AUTOMATION_COMMAND_TOPIC and mqtt_handler:
             if ha_automation_was_on_before_stopwatch is True:
                 logger.info(f"Stopwatch stopped. HA Automation ({HA_AUTOMATION_ENTITY_ID}) was ON before. Turning back ON.")
-                mqtt_handler.publish(HA_AUTOMATION_COMMAND_TOPIC, "ON")
+                await mqtt_handler.publish(HA_AUTOMATION_COMMAND_TOPIC, "ON") # Await async publish
             elif ha_automation_was_on_before_stopwatch is False:
                  logger.info(f"Stopwatch stopped. HA Automation ({HA_AUTOMATION_ENTITY_ID}) was OFF before. Leaving OFF.")
             else:
@@ -426,6 +431,15 @@ def main() -> None:
     MQTT_USER = os.getenv("MQTT_USERNAME")
     MQTT_PASS = os.getenv("MQTT_PASSWORD")
     MQTT_TOPIC = os.getenv("MQTT_TOPIC")
+    # Load publish delay
+    try:
+        MQTT_PUB_DELAY = float(os.getenv("MQTT_PUBLISH_DELAY", "0.1"))
+        if MQTT_PUB_DELAY < 0:
+             logger.warning("MQTT_PUBLISH_DELAY cannot be negative. Using default 0.1s.")
+             MQTT_PUB_DELAY = 0.1
+    except ValueError:
+        logger.warning("Invalid MQTT_PUBLISH_DELAY value. Using default 0.1s.")
+        MQTT_PUB_DELAY = 0.1
     # Load display config with defaults
     try:
         DISPLAY_WIDTH = int(os.getenv("DISPLAY_WIDTH", "12"))
@@ -502,8 +516,8 @@ def main() -> None:
         MQTT_PORT,
         MQTT_TOPIC,
         MQTT_USER,
-        MQTT_PASS
-        # on_connect_callback=send_initial_blanking_message # Removed
+        MQTT_PASS,
+        publish_delay=MQTT_PUB_DELAY # Pass delay to handler
     )
     mqtt_handler.connect() # Connect MQTT
 
