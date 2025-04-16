@@ -129,10 +129,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await unauthorized_reply(update)
         return
 
-    # Send initial blanking message on first authorized command
-    if not initial_blanking_sent:
-        send_initial_blanking_message()
-        initial_blanking_sent = True
+    # Blanking message is now sent only on /sw start
+    # if not initial_blanking_sent:
+    #     send_initial_blanking_message()
+    #     initial_blanking_sent = True
 
     # Also update the help message constant if commands change
     await update.message.reply_text(HELP_MESSAGE)
@@ -144,10 +144,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await unauthorized_reply(update)
         return
 
-    # Send initial blanking message on first authorized command
-    if not initial_blanking_sent:
-        send_initial_blanking_message()
-        initial_blanking_sent = True
+    # Blanking message is now sent only on /sw start
+    # if not initial_blanking_sent:
+    #     send_initial_blanking_message()
+    #     initial_blanking_sent = True
 
     await update.message.reply_text(HELP_MESSAGE)
 
@@ -157,7 +157,13 @@ async def sw_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await unauthorized_reply(update)
         return
 
-    global ha_automation_was_on_before_stopwatch
+    global initial_blanking_sent, ha_automation_was_on_before_stopwatch
+
+    # Send initial blanking message on first authorized /sw start command
+    if not initial_blanking_sent:
+        send_initial_blanking_message()
+        initial_blanking_sent = True
+
     # --- HA Integration: Turn OFF automation ---
     if HA_AUTOMATION_COMMAND_TOPIC and mqtt_handler:
         # Record current state *before* turning it off
