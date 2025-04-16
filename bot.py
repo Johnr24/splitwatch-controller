@@ -67,6 +67,7 @@ async def update_display(formatted_time: str): # Make async
 # --- HA Status Update Callback ---
 async def _status_update_callback(new_mode: TimerMode):
     """Publishes the new status to the HA status topic."""
+    global HA_MQTT_DISCOVERY_ENABLED, HA_STATUS_STATE_TOPIC, mqtt_handler # Declare globals used
     if HA_MQTT_DISCOVERY_ENABLED and HA_STATUS_STATE_TOPIC and mqtt_handler:
         status_payload = new_mode.name # e.g., "STOPPED", "RUNNING"
         logger.info(f"Publishing HA Status: {status_payload} to {HA_STATUS_STATE_TOPIC}")
@@ -137,6 +138,11 @@ async def call_ha_service(domain: str, service: str, target_entity_id: Optional[
 # --- Home Assistant MQTT Discovery ---
 async def publish_ha_discovery():
     """Publishes MQTT discovery messages for HA entities."""
+    # Declare globals used within this function
+    global HA_MQTT_DISCOVERY_ENABLED, HA_MQTT_DISCOVERY_PREFIX, HA_MQTT_NODE_ID
+    global HA_STATUS_STATE_TOPIC, HA_TIME_STATE_TOPIC, HA_COMMAND_TOPIC
+    global HA_DEVICE_INFO, HA_SHELLY_SWITCH_ENTITY_ID, mqtt_handler
+
     if not HA_MQTT_DISCOVERY_ENABLED or not mqtt_handler:
         logger.info("HA MQTT Discovery is disabled or MQTT handler not ready.")
         return
