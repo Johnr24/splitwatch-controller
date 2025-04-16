@@ -31,8 +31,7 @@ AUTHORIZED_USER_IDS: set[int] = set() # Set of authorized user IDs
 HA_URL: Optional[str] = None # URL for Home Assistant instance
 HA_LLAT: Optional[str] = None # Long-Lived Access Token
 HA_AUTOMATION_ENTITY_ID: Optional[str] = None # Automation to control via API
-HA_WEBHOOK_SHELLY_OFF: Optional[str] = None # Webhook ID for Shelly OFF
-HA_WEBHOOK_SHELLY_ON: Optional[str] = None # Webhook ID for Shelly ON
+HA_SHELLY_SWITCH_ENTITY_ID: Optional[str] = None # Shelly switch to control via API
 initial_blanking_sent: bool = False # Flag to track if initial blanking message was sent
 
 # --- Constants ---
@@ -89,34 +88,14 @@ async def send_initial_blanking_message(): # Make async
     else:
         logger.error("Cannot send initial blanking message: MQTT handler not ready.")
 
-# --- Home Assistant Webhook Trigger ---
-async def trigger_ha_webhook(webhook_id: str):
-    """Sends a POST request to a Home Assistant webhook."""
-    if not HA_URL or not webhook_id:
-        logger.debug("HA_URL or specific webhook_id not set, skipping webhook trigger.")
-        return
-
-    webhook_url = f"{HA_URL.rstrip('/')}/api/webhook/{webhook_id}"
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(webhook_url)
-            response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
-            logger.info(f"Successfully triggered Home Assistant webhook: {webhook_id}")
-    except httpx.RequestError as exc:
-        logger.error(f"Error sending webhook {webhook_id} to {webhook_url}: {exc}")
-    except httpx.HTTPStatusError as exc:
-        logger.error(f"Error response {exc.response.status_code} while sending webhook {webhook_id} to {webhook_url}: {exc.response.text}")
-    except Exception as e:
-        logger.error(f"An unexpected error occurred while triggering webhook {webhook_id}: {e}")
-
 # --- Home Assistant Service Call ---
-async def call_ha_service(domain: str, service: str, entity_id: Optional[str] = None):
+async def call_ha_service(domain: str, service: str, target_entity_id: Optional[str] = None):
     """Calls a Home Assistant service via the REST API using LLAT."""
     if not HA_URL or not HA_LLAT:
         logger.debug("HA_URL or HA_LLAT not set, skipping HA service call.")
         return
-    if not HA_AUTOMATION_ENTITY_ID: # Check if the target entity is configured
-        logger.debug("HA_AUTOMATION_ENTITY_ID not set, skipping HA service call.")
+    if not target_entity_id: # Check if a target entity was provided
+        logger.error(f"No target_entity_id provided for service call {domain}.{service}. Skipping.")
         return
 
     service_url = f"{HA_URL.rstrip('/')}/api/services/{domain}/{service}"
@@ -124,15 +103,15 @@ async def call_ha_service(domain: str, service: str, entity_id: Optional[str] = 
         "Authorization": f"Bearer {HA_LLAT}",
         "Content-Type": "application/json",
     }
-    # Use the globally configured entity ID for the payload
-    payload = {"entity_id": HA_AUTOMATION_ENTITY_ID}
+    # Use the provided entity ID for the payload
+    payload = {"entity_id": target_entity_id}
 
     try:
         async with httpx.AsyncClient() as client:
-            logger.info(f"Calling HA service: {domain}.{service} for entity: {HA_AUTOMATION_ENTITY_ID}")
+            logger.info(f"Calling HA service: {domain}.{service} for entity: {target_entity_id}")
             response = await client.post(service_url, headers=headers, json=payload)
             response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
-            logger.info(f"Successfully called HA service {domain}.{service}. Response: {response.status_code}")
+            logger.info(f"Successfully called HA service {domain}.{service} for {target_entity_id}. Response: {response.status_code}")
             # Optionally log response body for debugging (can be large)
             # logger.debug(f"HA Service Response Body: {response.text}")
     except httpx.RequestError as exc:
@@ -206,9 +185,9 @@ async def sw_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         initial_blanking_sent = True
 
     # --- HA Integration: Call turn_off service ---
-    if HA_AUTOMATION_ENTITY_ID: # Check if configured
+    if HA_AUTOMATION_ENTITY_ID: # Check if automation control is configured
         logger.info(f"Stopwatch starting. Calling automation.turn_off for {HA_AUTOMATION_ENTITY_ID}")
-        await call_ha_service("automation", "turn_off")
+        await call_ha_service("automation", "turn_off", target_entity_id=HA_AUTOMATION_ENTITY_ID)
     # --- End HA Integration ---
 
     if timer:
@@ -258,28 +237,26 @@ async def power_cycle_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await unauthorized_reply(update)
         return
 
-    if not HA_URL or not HA_WEBHOOK_SHELLY_OFF or not HA_WEBHOOK_SHELLY_ON:
-        await update.message.reply_text("Power cycle feature not configured (HA_URL or Shelly webhook IDs missing).")
-        logger.warning("Attempted power cycle, but HA_URL, HA_WEBHOOK_SHELLY_OFF, or HA_WEBHOOK_SHELLY_ON is not set.")
+    if not HA_URL or not HA_LLAT or not HA_SHELLY_SWITCH_ENTITY_ID:
+        await update.message.reply_text("Power cycle feature not configured (HA_URL, HA_LLAT, or HA_SHELLY_SWITCH_ENTITY_ID missing).")
+        logger.warning("Attempted power cycle, but HA_URL, HA_LLAT, or HA_SHELLY_SWITCH_ENTITY_ID is not set.")
         return
 
-    # No need to check MQTT connection for this anymore
-
     try:
-        await update.message.reply_text("Attempting power cycle: Triggering OFF webhook...")
-        logger.info(f"Triggering Shelly OFF webhook: {HA_WEBHOOK_SHELLY_OFF}")
-        await trigger_ha_webhook(HA_WEBHOOK_SHELLY_OFF)
+        await update.message.reply_text("Attempting power cycle: Calling switch.turn_off...")
+        logger.info(f"Calling switch.turn_off for Shelly: {HA_SHELLY_SWITCH_ENTITY_ID}")
+        await call_ha_service("switch", "turn_off", target_entity_id=HA_SHELLY_SWITCH_ENTITY_ID)
 
         await asyncio.sleep(3) # Wait for 3 seconds
 
-        await update.message.reply_text("Power cycle: Triggering ON webhook...")
-        logger.info(f"Triggering Shelly ON webhook: {HA_WEBHOOK_SHELLY_ON}")
-        await trigger_ha_webhook(HA_WEBHOOK_SHELLY_ON)
+        await update.message.reply_text("Power cycle: Calling switch.turn_on...")
+        logger.info(f"Calling switch.turn_on for Shelly: {HA_SHELLY_SWITCH_ENTITY_ID}")
+        await call_ha_service("switch", "turn_on", target_entity_id=HA_SHELLY_SWITCH_ENTITY_ID)
 
-        await update.message.reply_text("Power cycle sequence initiated via webhooks.")
-        logger.info("Power cycle sequence completed via webhooks.")
+        await update.message.reply_text("Power cycle sequence initiated via REST API.")
+        logger.info("Power cycle sequence completed via REST API.")
 
-    except Exception as e: # Catch potential errors from trigger_ha_webhook or sleep
+    except Exception as e: # Catch potential errors from call_ha_service or sleep
         logger.error(f"Error during power cycle sequence: {e}")
         await update.message.reply_text(f"An error occurred during power cycle: {e}")
 
@@ -297,9 +274,9 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         # --- HA Integration: Call turn_on service ---
         # Call turn_on only if the timer was actually a stopwatch
-        if was_stopwatch and HA_AUTOMATION_ENTITY_ID: # Check if configured
+        if was_stopwatch and HA_AUTOMATION_ENTITY_ID: # Check if automation control is configured
             logger.info(f"Stopwatch stopped. Calling automation.turn_on for {HA_AUTOMATION_ENTITY_ID}")
-            await call_ha_service("automation", "turn_on")
+            await call_ha_service("automation", "turn_on", target_entity_id=HA_AUTOMATION_ENTITY_ID)
         # --- End HA Integration ---
 
         await update.message.reply_text(message)
@@ -335,9 +312,9 @@ async def quit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         # --- HA Integration: Call turn_on service ---
         # Call turn_on only if the timer was actually a stopwatch before reset/quit
-        if was_stopwatch and HA_AUTOMATION_ENTITY_ID: # Check if configured
+        if was_stopwatch and HA_AUTOMATION_ENTITY_ID: # Check if automation control is configured
             logger.info(f"Quit command: Calling automation.turn_on for {HA_AUTOMATION_ENTITY_ID}")
-            await call_ha_service("automation", "turn_on")
+            await call_ha_service("automation", "turn_on", target_entity_id=HA_AUTOMATION_ENTITY_ID)
         # --- End HA Integration ---
 
         # Explicitly clear the display after quitting
@@ -474,8 +451,8 @@ async def shutdown(signal_num):
 def main() -> None:
     """Start the bot."""
     global mqtt_handler, timer, telegram_app, DISPLAY_WIDTH, DISPLAY_JUSTIFY, AUTHORIZED_USER_IDS
-    global HA_URL, HA_LLAT, HA_AUTOMATION_ENTITY_ID # REST API globals
-    global HA_WEBHOOK_SHELLY_OFF, HA_WEBHOOK_SHELLY_ON # Shelly Webhook globals
+    global HA_URL, HA_LLAT, HA_AUTOMATION_ENTITY_ID # REST API globals for Automation
+    global HA_SHELLY_SWITCH_ENTITY_ID # REST API global for Shelly
 
     # --- Load Environment Variables ---
     load_dotenv()
@@ -536,18 +513,15 @@ def main() -> None:
         HA_LLAT = None
         HA_AUTOMATION_ENTITY_ID = None
 
-    # Load HA Shelly Switch Webhook config
-    HA_WEBHOOK_SHELLY_OFF = os.getenv("HA_WEBHOOK_SHELLY_OFF")
-    HA_WEBHOOK_SHELLY_ON = os.getenv("HA_WEBHOOK_SHELLY_ON")
-    if HA_URL and HA_WEBHOOK_SHELLY_OFF and HA_WEBHOOK_SHELLY_ON:
-        logger.info("HA Shelly Switch Webhook Control Enabled.")
-        logger.info(f"  Webhook OFF: {HA_WEBHOOK_SHELLY_OFF}")
-        logger.info(f"  Webhook ON: {HA_WEBHOOK_SHELLY_ON}")
+    # Load HA Shelly Switch REST API config
+    HA_SHELLY_SWITCH_ENTITY_ID = os.getenv("HA_SHELLY_SWITCH_ENTITY_ID")
+    if HA_URL and HA_LLAT and HA_SHELLY_SWITCH_ENTITY_ID:
+        logger.info("HA Shelly Switch REST API Control Enabled.")
+        logger.info(f"  Shelly Entity ID: {HA_SHELLY_SWITCH_ENTITY_ID}")
     else:
-        logger.info("HA Shelly Switch Webhook Control Disabled (HA_URL, HA_WEBHOOK_SHELLY_OFF, or HA_WEBHOOK_SHELLY_ON not set).")
-        # Ensure all are None if not fully configured, HA_URL might still be needed for REST API
-        HA_WEBHOOK_SHELLY_OFF = None
-        HA_WEBHOOK_SHELLY_ON = None
+        logger.info("HA Shelly Switch REST API Control Disabled (HA_URL, HA_LLAT, or HA_SHELLY_SWITCH_ENTITY_ID not set).")
+        # Ensure Shelly ID is None if not fully configured
+        HA_SHELLY_SWITCH_ENTITY_ID = None
 
 
     # --- Validate Environment Variables ---
