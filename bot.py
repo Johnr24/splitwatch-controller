@@ -48,7 +48,8 @@ HELP_MESSAGE = (
     "/sub MM:SS [or SS] - Subtract time (timer)\n"
     "/status - Show current status\n"
     "/help - Show this help message\n"
-    "/pw - Power cycle the display controller"
+    "/pw - Power cycle the display controller\n"
+    "/quit - Stop timer/stopwatch, restore HA automation, clear display"
 )
 
 # --- MQTT Update Callback ---
@@ -545,7 +546,8 @@ def main() -> None:
     telegram_app.add_handler(CommandHandler("add", add_time_command))
     telegram_app.add_handler(CommandHandler("sub", sub_time_command))
     telegram_app.add_handler(CommandHandler("status", status_command))
-    telegram_app.add_handler(CommandHandler("pw", power_cycle_command)) # Add power cycle command
+    telegram_app.add_handler(CommandHandler("pw", power_cycle_command))
+    telegram_app.add_handler(CommandHandler("quit", quit_command)) # Add quit command
 
     # Handler for unknown commands - must be last
     telegram_app.add_handler(MessageHandler(filters.COMMAND, unknown_command))
