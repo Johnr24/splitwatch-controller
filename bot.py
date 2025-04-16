@@ -2,8 +2,9 @@ import logging
 import os
 import signal
 import asyncio
-from typing import Optional # Add this import
+from typing import Optional
 from dotenv import load_dotenv
+import httpx # Added for webhooks
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
@@ -27,12 +28,11 @@ DISPLAY_WIDTH: int = 12 # Default display width
 DISPLAY_JUSTIFY: str = "center" # Default justification
 AUTHORIZED_USER_IDS: set[int] = set() # Set of authorized user IDs
 # Home Assistant Integration State
-HA_AUTOMATION_ENTITY_ID: Optional[str] = None
-HA_AUTOMATION_COMMAND_TOPIC: Optional[str] = None
-HA_SHELLY_SWITCH_ENTITY_ID: Optional[str] = None
+HA_URL: Optional[str] = None # URL for Home Assistant instance
+HA_WEBHOOK_STOPWATCH_START: Optional[str] = None # Webhook ID for stopwatch start
+HA_WEBHOOK_STOPWATCH_STOP: Optional[str] = None # Webhook ID for stopwatch stop/quit
+HA_SHELLY_SWITCH_ENTITY_ID: Optional[str] = None # Shelly switch control remains MQTT for now
 HA_SHELLY_SWITCH_COMMAND_TOPIC: Optional[str] = None
-ha_automation_last_state: Optional[str] = None # Store 'on' or 'off'
-ha_automation_was_on_before_stopwatch: Optional[bool] = None # Store True/False if it was on
 initial_blanking_sent: bool = False # Flag to track if initial blanking message was sent
 
 # --- Constants ---
@@ -89,19 +89,26 @@ async def send_initial_blanking_message(): # Make async
     else:
         logger.error("Cannot send initial blanking message: MQTT handler not ready.")
 
-# --- Home Assistant MQTT Message Handler ---
-def _on_ha_automation_state(topic: str, payload: str):
-    """Handles state updates from the HA automation."""
-    global ha_automation_last_state
-    state = payload.lower()
-    if state in ['on', 'off']:
-        if ha_automation_last_state != state:
-            logger.info(f"HA Automation ({HA_AUTOMATION_ENTITY_ID}) state changed to: {state}")
-            ha_automation_last_state = state
-        else:
-             logger.debug(f"HA Automation ({HA_AUTOMATION_ENTITY_ID}) state update received: {state} (no change)")
-    else:
-        logger.warning(f"Received unexpected state payload for HA Automation: {payload}")
+# --- Home Assistant Webhook Trigger ---
+async def trigger_ha_webhook(webhook_id: str):
+    """Sends a POST request to a Home Assistant webhook."""
+    if not HA_URL or not webhook_id:
+        logger.debug("HA_URL or webhook_id not set, skipping webhook trigger.")
+        return
+
+    webhook_url = f"{HA_URL.rstrip('/')}/api/webhook/{webhook_id}"
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(webhook_url)
+            response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
+            logger.info(f"Successfully triggered Home Assistant webhook: {webhook_id}")
+    except httpx.RequestError as exc:
+        logger.error(f"Error sending webhook {webhook_id} to {webhook_url}: {exc}")
+    except httpx.HTTPStatusError as exc:
+        logger.error(f"Error response {exc.response.status_code} while sending webhook {webhook_id} to {webhook_url}: {exc.response.text}")
+    except Exception as e:
+        logger.error(f"An unexpected error occurred while triggering webhook {webhook_id}: {e}")
+
 
 # --- Authorization Check ---
 def is_authorized(update: Update) -> bool:
@@ -158,19 +165,17 @@ async def sw_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await unauthorized_reply(update)
         return
 
-    global initial_blanking_sent, ha_automation_was_on_before_stopwatch
+    global initial_blanking_sent
 
     # Send initial blanking message on first authorized /sw start command
     if not initial_blanking_sent:
         await send_initial_blanking_message() # Await async call
         initial_blanking_sent = True
 
-    # --- HA Integration: Turn OFF automation ---
-    if HA_AUTOMATION_COMMAND_TOPIC and mqtt_handler:
-        # Record current state *before* turning it off
-        ha_automation_was_on_before_stopwatch = (ha_automation_last_state == 'on')
-        logger.info(f"Stopwatch starting. HA Automation ({HA_AUTOMATION_ENTITY_ID}) was: {'ON' if ha_automation_was_on_before_stopwatch else 'OFF'}. Turning OFF.")
-        await mqtt_handler.publish(HA_AUTOMATION_COMMAND_TOPIC, "OFF") # Await async publish
+    # --- HA Integration: Trigger Start Webhook ---
+    if HA_WEBHOOK_STOPWATCH_START:
+        logger.info(f"Stopwatch starting. Triggering HA webhook: {HA_WEBHOOK_STOPWATCH_START}")
+        await trigger_ha_webhook(HA_WEBHOOK_STOPWATCH_START)
     # --- End HA Integration ---
 
     if timer:
@@ -260,23 +265,16 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await unauthorized_reply(update)
         return
 
-    global ha_automation_was_on_before_stopwatch
     was_stopwatch = timer and timer.mode == TimerMode.STOPWATCH # Check *before* stopping
 
     if timer:
         message = timer.stop() # This stops the timer/stopwatch
 
-        # --- HA Integration: Restore automation state ---
-        if was_stopwatch and HA_AUTOMATION_COMMAND_TOPIC and mqtt_handler:
-            if ha_automation_was_on_before_stopwatch is True:
-                logger.info(f"Stopwatch stopped. HA Automation ({HA_AUTOMATION_ENTITY_ID}) was ON before. Turning back ON.")
-                await mqtt_handler.publish(HA_AUTOMATION_COMMAND_TOPIC, "ON") # Await async publish
-            elif ha_automation_was_on_before_stopwatch is False:
-                 logger.info(f"Stopwatch stopped. HA Automation ({HA_AUTOMATION_ENTITY_ID}) was OFF before. Leaving OFF.")
-            else:
-                 # State was unknown when stopwatch started
-                 logger.warning(f"Stopwatch stopped. Previous HA Automation state ({HA_AUTOMATION_ENTITY_ID}) was unknown. Taking no action.")
-            ha_automation_was_on_before_stopwatch = None # Reset tracker
+        # --- HA Integration: Trigger Stop Webhook ---
+        # Trigger the stop webhook only if the timer was actually a stopwatch
+        if was_stopwatch and HA_WEBHOOK_STOPWATCH_STOP:
+            logger.info(f"Stopwatch stopped. Triggering HA webhook: {HA_WEBHOOK_STOPWATCH_STOP}")
+            await trigger_ha_webhook(HA_WEBHOOK_STOPWATCH_STOP)
         # --- End HA Integration ---
 
         await update.message.reply_text(message)
@@ -304,27 +302,17 @@ async def quit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await unauthorized_reply(update)
         return
 
-    global ha_automation_was_on_before_stopwatch
     was_stopwatch = timer and timer.mode == TimerMode.STOPWATCH # Check if it was running as stopwatch before reset
 
     if timer:
         # Reset the timer first (stops job, clears internal state)
         reset_message = timer.reset() # This also sends 00:00:00 to display via callback
 
-        # --- HA Integration: Restore automation state ---
-        # This logic runs if the timer *was* a stopwatch before being reset
-        if was_stopwatch and HA_AUTOMATION_COMMAND_TOPIC and mqtt_handler:
-            if ha_automation_was_on_before_stopwatch is True:
-                logger.info(f"Quit command: HA Automation ({HA_AUTOMATION_ENTITY_ID}) was ON before. Turning back ON.")
-                # Publish ON command - need to await the publish
-                await mqtt_handler.publish(HA_AUTOMATION_COMMAND_TOPIC, "ON")
-            elif ha_automation_was_on_before_stopwatch is False:
-                 logger.info(f"Quit command: HA Automation ({HA_AUTOMATION_ENTITY_ID}) was OFF before. Leaving OFF.")
-            else:
-                 # State was unknown when stopwatch started
-                 logger.warning(f"Quit command: Previous HA Automation state ({HA_AUTOMATION_ENTITY_ID}) was unknown. Taking no action.")
-            # Reset the tracker regardless of action taken
-            ha_automation_was_on_before_stopwatch = None
+        # --- HA Integration: Trigger Stop Webhook ---
+        # Trigger the stop webhook only if the timer was actually a stopwatch before reset
+        if was_stopwatch and HA_WEBHOOK_STOPWATCH_STOP:
+            logger.info(f"Quit command: Triggering HA webhook: {HA_WEBHOOK_STOPWATCH_STOP}")
+            await trigger_ha_webhook(HA_WEBHOOK_STOPWATCH_STOP)
         # --- End HA Integration ---
 
         # Explicitly clear the display after quitting
@@ -461,7 +449,8 @@ async def shutdown(signal_num):
 def main() -> None:
     """Start the bot."""
     global mqtt_handler, timer, telegram_app, DISPLAY_WIDTH, DISPLAY_JUSTIFY, AUTHORIZED_USER_IDS
-    global HA_AUTOMATION_ENTITY_ID, HA_AUTOMATION_COMMAND_TOPIC, HA_SHELLY_SWITCH_ENTITY_ID, HA_SHELLY_SWITCH_COMMAND_TOPIC # Add HA globals
+    global HA_URL, HA_WEBHOOK_STOPWATCH_START, HA_WEBHOOK_STOPWATCH_STOP # Webhook globals
+    global HA_SHELLY_SWITCH_ENTITY_ID, HA_SHELLY_SWITCH_COMMAND_TOPIC # Shelly MQTT globals
 
     # --- Load Environment Variables ---
     load_dotenv()
@@ -505,28 +494,27 @@ def main() -> None:
     else:
         logger.warning("AUTHORIZED_USER_IDS is not set in the environment. No users will be authorized.")
         AUTHORIZED_USER_IDS = set()
-    # Load HA config
-    HA_AUTOMATION_ENTITY_ID = os.getenv("HA_AUTOMATION_ENTITY_ID")
-    HA_SHELLY_SWITCH_ENTITY_ID = os.getenv("HA_SHELLY_SWITCH_ENTITY_ID")
-    HA_MQTT_DISCOVERY_PREFIX = os.getenv("HA_MQTT_DISCOVERY_PREFIX", "homeassistant") # Default prefix
 
-    ha_automation_state_topic = None
-    # Derive Automation topics
-    if HA_AUTOMATION_ENTITY_ID:
-        # Derive topics assuming standard HA structure: <prefix>/<component>/<node_id>/<object_id>/<suffix>
-        # For automation: <prefix>/automation/<entity_id without domain>/state or /state (using state for command based on user feedback)
-        entity_id_part = HA_AUTOMATION_ENTITY_ID.split('.')[-1] # Get 'timesplitters_2' from 'automation.timesplitters_2'
-        HA_AUTOMATION_COMMAND_TOPIC = f"{HA_MQTT_DISCOVERY_PREFIX}/automation/{entity_id_part}/state" # Changed /set to /state
-        ha_automation_state_topic = f"{HA_MQTT_DISCOVERY_PREFIX}/automation/{entity_id_part}/state"
-        logger.info(f"HA Integration Enabled for: {HA_AUTOMATION_ENTITY_ID}")
-        logger.info(f"  Command Topic: {HA_AUTOMATION_COMMAND_TOPIC}")
-        logger.info(f"  State Topic: {ha_automation_state_topic}")
+    # Load HA Webhook config
+    HA_URL = os.getenv("HA_URL")
+    HA_WEBHOOK_STOPWATCH_START = os.getenv("HA_WEBHOOK_STOPWATCH_START")
+    HA_WEBHOOK_STOPWATCH_STOP = os.getenv("HA_WEBHOOK_STOPWATCH_STOP")
+    if HA_URL and HA_WEBHOOK_STOPWATCH_START and HA_WEBHOOK_STOPWATCH_STOP:
+        logger.info("HA Webhook Integration Enabled.")
+        logger.info(f"  HA URL: {HA_URL}")
+        logger.info(f"  Webhook Start: {HA_WEBHOOK_STOPWATCH_START}")
+        logger.info(f"  Webhook Stop: {HA_WEBHOOK_STOPWATCH_STOP}")
     else:
-        logger.info("HA Automation Integration Disabled (HA_AUTOMATION_ENTITY_ID not set).")
+        logger.info("HA Webhook Integration Disabled (HA_URL, HA_WEBHOOK_STOPWATCH_START, or HA_WEBHOOK_STOPWATCH_STOP not set).")
+        HA_URL = None # Ensure it's None if not fully configured
+        HA_WEBHOOK_STOPWATCH_START = None
+        HA_WEBHOOK_STOPWATCH_STOP = None
 
-    # Derive Shelly Switch topics
+    # Load HA Shelly Switch MQTT config
+    HA_SHELLY_SWITCH_ENTITY_ID = os.getenv("HA_SHELLY_SWITCH_ENTITY_ID")
+    HA_MQTT_DISCOVERY_PREFIX = os.getenv("HA_MQTT_DISCOVERY_PREFIX", "homeassistant") # Default prefix for Shelly
     if HA_SHELLY_SWITCH_ENTITY_ID:
-         # Derive topics assuming standard HA structure: <prefix>/<component>/<node_id>/<object_id>/<suffix>
+         # Derive Shelly Switch command topic (still uses MQTT)
          # For switch: <prefix>/switch/<entity_id without domain>/state (using state for command based on user feedback)
          entity_id_part = HA_SHELLY_SWITCH_ENTITY_ID.split('.')[-1]
          HA_SHELLY_SWITCH_COMMAND_TOPIC = f"{HA_MQTT_DISCOVERY_PREFIX}/switch/{entity_id_part}/state" # Changed /set to /state
@@ -562,8 +550,7 @@ def main() -> None:
     mqtt_handler.connect() # Connect MQTT
 
     # --- Subscribe to HA State Topic (if enabled) ---
-    if ha_automation_state_topic and mqtt_handler:
-        mqtt_handler.subscribe(ha_automation_state_topic, _on_ha_automation_state)
+    # Removed HA automation state subscription
 
     logger.info("Initializing Timer...")
     timer = Timer(update_callback=update_display)
