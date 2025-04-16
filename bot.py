@@ -23,6 +23,21 @@ mqtt_handler: MQTTHandler = None
 timer: Timer = None
 telegram_app: Application = None
 
+# --- Constants ---
+HELP_MESSAGE = (
+    "SplitWatch Bot Started!\n"
+    "Commands:\n"
+    "/sw start - Start stopwatch\n"
+    "/timer MM:SS [or SS] - Start timer\n"
+    "/stop - Stop current timer/stopwatch\n"
+    "/reset - Reset timer/stopwatch\n"
+    "/split - Record split time (stopwatch)\n"
+    "/add MM:SS [or SS] - Add time (timer)\n"
+    "/sub MM:SS [or SS] - Subtract time (timer)\n"
+    "/status - Show current status\n"
+    "/help - Show this help message"
+)
+
 # --- MQTT Update Callback ---
 def update_display(formatted_time: str):
     """Callback function passed to the Timer to update MQTT."""
@@ -37,18 +52,12 @@ def update_display(formatted_time: str):
 # --- Telegram Command Handlers ---
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Sends explanation on how to use the bot."""
-    await update.message.reply_text(
-        "SplitWatch Bot Started!\n"
-        "Commands:\n"
-        "/sw start - Start stopwatch\n"
-        "/timer MM:SS [or SS]- Start timer\n"
-        "/stop - Stop current timer/stopwatch\n"
-        "/reset - Reset timer/stopwatch\n"
-        "/split - Record split time (stopwatch)\n"
-        "/add MM:SS [or SS] - Add time (timer)\n"
-        "/sub MM:SS [or SS] - Subtract time (timer)\n"
-        "/status - Show current status"
-    )
+    # Also update the help message constant if commands change
+    await update.message.reply_text(HELP_MESSAGE)
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Sends the help message."""
+    await update.message.reply_text(HELP_MESSAGE)
 
 async def sw_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Starts the stopwatch."""
@@ -255,6 +264,7 @@ def main() -> None:
 
     # --- Register Telegram Handlers ---
     telegram_app.add_handler(CommandHandler("start", start_command))
+    telegram_app.add_handler(CommandHandler("help", help_command))
     telegram_app.add_handler(CommandHandler("sw", sw_start_command)) # Stopwatch start
     telegram_app.add_handler(CommandHandler("timer", timer_start_command))
     telegram_app.add_handler(CommandHandler("stop", stop_command))
