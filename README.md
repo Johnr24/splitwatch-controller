@@ -53,15 +53,15 @@ Interact with the bot via Telegram using the following commands:
 
 *   `/start`, `/help`: Show the help message.
 *   `/sw start`: ▶️ Start/resume the stopwatch.
-*   `/timer MM:SS` or `/timer SS`: ⏳ Start a countdown timer.
+*   `/timer MM:SS` or `/timer SS`:  Start a countdown timer.
 *   `/stop`: ⏸️ Pause the stopwatch or timer.
 *   `/reset`: ⏹️ Stop and reset to `00:00:00`.
-*   `/split`: 📌 Record a split time (stopwatch only).
+*   `/split`:  Record a split time (stopwatch only).
 *   `/add MM:SS` or `/add SS`: ➕ Add time to a running timer.
 *   `/sub MM:SS` or `/sub SS`: ➖ Subtract time from a running timer.
-*   `/status`: 📊 Show the current timer/stopwatch status.
-*   `/pw`: 🔌 Power cycle the display via the configured Shelly switch (requires HA integration).
-*   `/quit`: 🚪 Stop/reset, clear the display, and restore HA automation state (if applicable).
+*   `/status`:  Show the current timer/stopwatch status.
+*   `/pw`:  Power cycle the display via the configured Shelly switch (requires HA integration).
+*   `/quit`:  Stop/reset, clear the display, and restore HA automation state (if applicable).
 
 ## 🏠 Home Assistant Integration Details
 
