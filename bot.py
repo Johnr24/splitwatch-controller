@@ -271,6 +271,74 @@ async def publish_ha_discovery():
     logger.info("Finished publishing HA MQTT Discovery messages.")
 
 
+# --- MQTT Command Handler ---
+async def _on_ha_command(topic: str, payload: str):
+    """Handles commands received from Home Assistant via MQTT."""
+    # Declare globals used within this function
+    global HA_MQTT_DISCOVERY_ENABLED, timer, HA_AUTOMATION_ENTITY_ID
+    global HA_SHELLY_SWITCH_ENTITY_ID, HA_URL, HA_LLAT
+
+    logger.info(f"Received HA command on topic '{topic}': {payload}")
+
+    # Simulate an Update object for authorization and context (if needed)
+    # Note: This is a simplification. We don't have a real user context here.
+    # Authorization might need rethinking if commands can come from HA directly.
+    # For now, assume commands from HA are implicitly authorized if discovery is enabled.
+
+    if not HA_MQTT_DISCOVERY_ENABLED:
+        logger.warning("Received HA command but discovery is disabled. Ignoring.")
+        return
+
+    # We don't have 'update' or 'context' here, so call timer methods directly
+    # or adapt command handlers to work without them.
+    # Let's call timer methods directly for simplicity.
+
+    message = "Unknown command"
+    try:
+        if payload == CMD_START:
+            if timer:
+                # Need to handle HA REST call if configured
+                if HA_AUTOMATION_ENTITY_ID:
+                    logger.info(f"HA Command '{CMD_START}': Calling automation.turn_off for {HA_AUTOMATION_ENTITY_ID}")
+                    await call_ha_service("automation", "turn_off", target_entity_id=HA_AUTOMATION_ENTITY_ID)
+                message = await timer.start_stopwatch() # Now async
+            else: message = "Timer not initialized."
+        elif payload == CMD_STOP:
+            if timer:
+                was_stopwatch = timer.mode == TimerMode.STOPWATCH
+                message = await timer.stop() # Now async
+                # Need to handle HA REST call if configured
+                if was_stopwatch and HA_AUTOMATION_ENTITY_ID:
+                    logger.info(f"HA Command '{CMD_STOP}': Calling automation.turn_on for {HA_AUTOMATION_ENTITY_ID}")
+                    await call_ha_service("automation", "turn_on", target_entity_id=HA_AUTOMATION_ENTITY_ID)
+            else: message = "Timer not initialized."
+        elif payload == CMD_RESET:
+            if timer:
+                message = await timer.reset() # Now async
+            else: message = "Timer not initialized."
+        elif payload == CMD_SPLIT:
+            if timer:
+                message = timer.split() # Not async
+            else: message = "Timer not initialized."
+        elif payload == CMD_PW_CYCLE:
+             if HA_SHELLY_SWITCH_ENTITY_ID and HA_URL and HA_LLAT:
+                 logger.info(f"HA Command '{CMD_PW_CYCLE}': Initiating power cycle for {HA_SHELLY_SWITCH_ENTITY_ID}")
+                 # Replicate power cycle logic without Telegram replies
+                 await call_ha_service("switch", "turn_off", target_entity_id=HA_SHELLY_SWITCH_ENTITY_ID)
+                 await asyncio.sleep(3)
+                 await call_ha_service("switch", "turn_on", target_entity_id=HA_SHELLY_SWITCH_ENTITY_ID)
+                 message = "Power cycle initiated via HA command."
+             else:
+                 message = "Power cycle feature not configured for HA command."
+        else:
+            logger.warning(f"Received unknown HA command payload: {payload}")
+
+        logger.info(f"HA Command '{payload}' processed. Result: {message}")
+
+    except Exception as e:
+        logger.error(f"Error processing HA command '{payload}': {e}")
+
+
 # --- Authorization Check ---
 def is_authorized(update: Update) -> bool:
     """Checks if the user sending the update is authorized."""
@@ -730,8 +798,20 @@ def main() -> None:
     # --- Subscribe to HA State Topic (if enabled) ---
     # Removed HA automation state subscription
 
+    # --- Subscribe to HA Command Topic (if enabled) ---
+    # Subscription needs to happen after connect() is called,
+    # assuming connect() initializes the client needed for subscribe.
+    if HA_MQTT_DISCOVERY_ENABLED and HA_COMMAND_TOPIC:
+        logger.info(f"Subscribing to HA Command Topic: {HA_COMMAND_TOPIC}")
+        # Pass the async command handler to the MQTT client
+        mqtt_handler.subscribe(HA_COMMAND_TOPIC, _on_ha_command)
+
     logger.info("Initializing Timer...")
-    timer = Timer(update_callback=update_display)
+    # Pass both callbacks to the Timer instance
+    timer = Timer(
+        update_callback=update_display,
+        status_update_callback=_status_update_callback
+    )
 
     logger.info("Initializing Telegram Bot Application...")
     telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
