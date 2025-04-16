@@ -69,13 +69,3 @@ class MQTTHandler:
                 logger.warning(f"Failed to publish message to topic '{self.topic}'. RC: {result.rc}")
         else:
             logger.warning("MQTT client not connected. Cannot publish message.")
-
-```
-
-**3. Create `timer.py`**
-
-This file will contain the core logic for the stopwatch and timer. We'll start with a basic structure.
-
-```
-timer.py
-<<<<<<< SEARCH
