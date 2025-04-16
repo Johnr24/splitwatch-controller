@@ -207,6 +207,40 @@ async def timer_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     except ValueError:
         await update.message.reply_text("Invalid time format. Use MM:SS or SS.")
 
+async def power_cycle_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Power cycles the Shelly switch controlling the display."""
+    if not is_authorized(update):
+        await unauthorized_reply(update)
+        return
+
+    if not HA_SHELLY_SWITCH_COMMAND_TOPIC:
+        await update.message.reply_text("Power cycle feature not configured (Shelly switch entity ID missing).")
+        logger.warning("Attempted power cycle, but HA_SHELLY_SWITCH_COMMAND_TOPIC is not set.")
+        return
+
+    if not mqtt_handler or not mqtt_handler.client.is_connected():
+        await update.message.reply_text("Cannot power cycle: MQTT client not connected.")
+        logger.warning("Attempted power cycle, but MQTT client is not connected.")
+        return
+
+    try:
+        await update.message.reply_text("Attempting power cycle: Turning OFF...")
+        logger.info(f"Sending OFF command to Shelly switch: {HA_SHELLY_SWITCH_COMMAND_TOPIC}")
+        mqtt_handler.publish(HA_SHELLY_SWITCH_COMMAND_TOPIC, "OFF")
+
+        await asyncio.sleep(3) # Wait for 3 seconds
+
+        await update.message.reply_text("Power cycle: Turning ON...")
+        logger.info(f"Sending ON command to Shelly switch: {HA_SHELLY_SWITCH_COMMAND_TOPIC}")
+        mqtt_handler.publish(HA_SHELLY_SWITCH_COMMAND_TOPIC, "ON")
+
+        await update.message.reply_text("Power cycle sequence initiated.")
+        logger.info("Power cycle sequence completed.")
+
+    except Exception as e:
+        logger.error(f"Error during power cycle sequence: {e}")
+        await update.message.reply_text(f"An error occurred during power cycle: {e}")
+
 
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Stops the current timer or stopwatch."""
