@@ -17,7 +17,7 @@ class MQTTHandler:
         self.topic = topic
         self.username = username
         self.password = password
-        self.client = paho_mqtt.Client(paho_mqtt.CallbackAPIVersion.VERSION1)
+        self.client = paho_mqtt.Client() # Removed CallbackAPIVersion argument for paho-mqtt v1.x compatibility
         self.client.on_connect = self._on_connect
         self.client.on_disconnect = self._on_disconnect
         self.client.on_publish = self._on_publish
