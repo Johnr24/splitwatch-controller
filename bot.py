@@ -514,9 +514,9 @@ def main() -> None:
     # Derive Automation topics
     if HA_AUTOMATION_ENTITY_ID:
         # Derive topics assuming standard HA structure: <prefix>/<component>/<node_id>/<object_id>/<suffix>
-        # For automation: <prefix>/automation/<entity_id without domain>/state or /set
+        # For automation: <prefix>/automation/<entity_id without domain>/state or /state (using state for command based on user feedback)
         entity_id_part = HA_AUTOMATION_ENTITY_ID.split('.')[-1] # Get 'timesplitters_2' from 'automation.timesplitters_2'
-        HA_AUTOMATION_COMMAND_TOPIC = f"{HA_MQTT_DISCOVERY_PREFIX}/automation/{entity_id_part}/set"
+        HA_AUTOMATION_COMMAND_TOPIC = f"{HA_MQTT_DISCOVERY_PREFIX}/automation/{entity_id_part}/state" # Changed /set to /state
         ha_automation_state_topic = f"{HA_MQTT_DISCOVERY_PREFIX}/automation/{entity_id_part}/state"
         logger.info(f"HA Integration Enabled for: {HA_AUTOMATION_ENTITY_ID}")
         logger.info(f"  Command Topic: {HA_AUTOMATION_COMMAND_TOPIC}")
@@ -527,9 +527,9 @@ def main() -> None:
     # Derive Shelly Switch topics
     if HA_SHELLY_SWITCH_ENTITY_ID:
          # Derive topics assuming standard HA structure: <prefix>/<component>/<node_id>/<object_id>/<suffix>
-         # For switch: <prefix>/switch/<entity_id without domain>/set
+         # For switch: <prefix>/switch/<entity_id without domain>/state (using state for command based on user feedback)
          entity_id_part = HA_SHELLY_SWITCH_ENTITY_ID.split('.')[-1]
-         HA_SHELLY_SWITCH_COMMAND_TOPIC = f"{HA_MQTT_DISCOVERY_PREFIX}/switch/{entity_id_part}/set"
+         HA_SHELLY_SWITCH_COMMAND_TOPIC = f"{HA_MQTT_DISCOVERY_PREFIX}/switch/{entity_id_part}/state" # Changed /set to /state
          logger.info(f"HA Shelly Switch Control Enabled for: {HA_SHELLY_SWITCH_ENTITY_ID}")
          logger.info(f"  Command Topic: {HA_SHELLY_SWITCH_COMMAND_TOPIC}")
          # We don't need to subscribe to the Shelly state for this command
