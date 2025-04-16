@@ -7,16 +7,29 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+from typing import Callable, Optional
+
 class MQTTHandler:
     """Handles MQTT connection and publishing."""
 
-    def __init__(self, broker_address, broker_port, topic, username=None, password=None):
-        """Initializes the MQTT client."""
+    def __init__(self, broker_address: str, broker_port: int, topic: str, username: Optional[str] = None, password: Optional[str] = None, on_connect_callback: Optional[Callable[[], None]] = None):
+        """
+        Initializes the MQTT client.
+
+        Args:
+            broker_address: The MQTT broker address.
+            broker_port: The MQTT broker port.
+            topic: The MQTT topic to publish to.
+            username: Optional MQTT username.
+            password: Optional MQTT password.
+            on_connect_callback: Optional callback function to execute on successful connection.
+        """
         self.broker_address = broker_address
         self.broker_port = int(broker_port)
         self.topic = topic
         self.username = username
         self.password = password
+        self._on_connect_callback = on_connect_callback # Store the callback
         self.client = paho_mqtt.Client() # Removed CallbackAPIVersion argument for paho-mqtt v1.x compatibility
         self.client.on_connect = self._on_connect
         self.client.on_disconnect = self._on_disconnect
@@ -29,6 +42,12 @@ class MQTTHandler:
         """Callback for when the client connects to the MQTT broker."""
         if rc == 0:
             logger.info(f"Successfully connected to MQTT Broker at {self.broker_address}:{self.broker_port}")
+            # Execute the callback if connection was successful and callback exists
+            if self._on_connect_callback:
+                try:
+                    self._on_connect_callback()
+                except Exception as e:
+                    logger.error(f"Error executing on_connect_callback: {e}")
         else:
             logger.error(f"Failed to connect to MQTT Broker, return code {rc}")
 

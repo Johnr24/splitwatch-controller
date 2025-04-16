@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 mqtt_handler: MQTTHandler = None
 timer: Timer = None
 telegram_app: Application = None
+DISPLAY_WIDTH: int = 12 # Default display width
+DISPLAY_JUSTIFY: str = "center" # Default justification
 
 # --- Constants ---
 HELP_MESSAGE = (
@@ -40,14 +42,41 @@ HELP_MESSAGE = (
 
 # --- MQTT Update Callback ---
 def update_display(formatted_time: str):
-    """Callback function passed to the Timer to update MQTT."""
+    """Callback function passed to the Timer to format and update MQTT."""
+    global DISPLAY_WIDTH, DISPLAY_JUSTIFY # Access global config
     if mqtt_handler:
-        # Add two spaces prefix for the split-flap display formatting
-        payload = f"  {formatted_time}"
-        logger.debug(f"Sending to MQTT: '{payload}'") # Log the actual payload being sent
+        # Format the time string using the configured width and justification
+        payload = format_for_display(formatted_time)
+        logger.debug(f"Sending to MQTT: '{payload}' (Justify: {DISPLAY_JUSTIFY}, Width: {DISPLAY_WIDTH})")
         mqtt_handler.publish(payload)
     else:
         logger.warning("MQTT handler not initialized, cannot update display.")
+
+# --- Display Formatting Logic ---
+def format_for_display(text: str) -> str:
+    """Formats the text according to DISPLAY_WIDTH and DISPLAY_JUSTIFY."""
+    width = DISPLAY_WIDTH
+    justify = DISPLAY_JUSTIFY.lower()
+
+    if justify == 'left':
+        return text.ljust(width)
+    elif justify == 'right':
+        return text.rjust(width)
+    elif justify == 'center':
+        return text.center(width)
+    else:
+        logger.warning(f"Invalid DISPLAY_JUSTIFY value '{DISPLAY_JUSTIFY}'. Defaulting to center.")
+        return text.center(width)
+
+def send_initial_blanking_message():
+    """Sends a blank message to clear the display upon connection."""
+    if mqtt_handler:
+        blank_message = " " * DISPLAY_WIDTH
+        logger.info(f"Sending initial blanking message ({DISPLAY_WIDTH} spaces) to MQTT.")
+        mqtt_handler.publish(blank_message)
+    else:
+        logger.error("Cannot send initial blanking message: MQTT handler not ready.")
+
 
 # --- Telegram Command Handlers ---
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -226,7 +255,7 @@ async def shutdown(signal_num):
 # --- Main Execution ---
 def main() -> None:
     """Start the bot."""
-    global mqtt_handler, timer, telegram_app
+    global mqtt_handler, timer, telegram_app, DISPLAY_WIDTH, DISPLAY_JUSTIFY
 
     # --- Load Environment Variables ---
     load_dotenv()
@@ -236,6 +265,20 @@ def main() -> None:
     MQTT_USER = os.getenv("MQTT_USERNAME")
     MQTT_PASS = os.getenv("MQTT_PASSWORD")
     MQTT_TOPIC = os.getenv("MQTT_TOPIC")
+    # Load display config with defaults
+    try:
+        DISPLAY_WIDTH = int(os.getenv("DISPLAY_WIDTH", "12"))
+        if DISPLAY_WIDTH <= 0:
+            logger.warning("DISPLAY_WIDTH must be positive. Using default 12.")
+            DISPLAY_WIDTH = 12
+    except ValueError:
+        logger.warning("Invalid DISPLAY_WIDTH value. Using default 12.")
+        DISPLAY_WIDTH = 12
+    DISPLAY_JUSTIFY = os.getenv("DISPLAY_JUSTIFY", "center").lower()
+    if DISPLAY_JUSTIFY not in ["left", "center", "right"]:
+        logger.warning(f"Invalid DISPLAY_JUSTIFY value '{DISPLAY_JUSTIFY}'. Using default 'center'.")
+        DISPLAY_JUSTIFY = "center"
+
 
     # --- Validate Environment Variables ---
     if not TELEGRAM_TOKEN:
@@ -250,8 +293,16 @@ def main() -> None:
 
     # --- Initialize Components ---
     logger.info("Initializing MQTT Handler...")
-    mqtt_handler = MQTTHandler(MQTT_BROKER, MQTT_PORT, MQTT_TOPIC, MQTT_USER, MQTT_PASS)
-    mqtt_handler.connect() # Connect MQTT
+    # Pass the blanking function as the on_connect_callback
+    mqtt_handler = MQTTHandler(
+        MQTT_BROKER,
+        MQTT_PORT,
+        MQTT_TOPIC,
+        MQTT_USER,
+        MQTT_PASS,
+        on_connect_callback=send_initial_blanking_message
+    )
+    mqtt_handler.connect() # Connect MQTT (will trigger blanking message on success)
 
     logger.info("Initializing Timer...")
     timer = Timer(update_callback=update_display)
