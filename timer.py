@@ -10,6 +10,7 @@ class TimerMode(Enum):
     STOPPED = auto()
     STOPWATCH = auto()
     TIMER = auto()
+    PAUSED = auto() # Add PAUSED state
 
 class Timer:
     """Manages stopwatch and timer functionality."""
@@ -124,32 +125,50 @@ class Timer:
         self.job_queue = job_queue
 
     def start_stopwatch(self) -> str:
-        """Starts the stopwatch."""
-        if self.mode != TimerMode.STOPPED:
-            logger.warning(f"Cannot start stopwatch, already in mode: {self.mode.name}")
-            return f"Cannot start: Currently in {self.mode.name} mode."
+        """Starts or resumes the stopwatch."""
+        if self.mode == TimerMode.STOPWATCH or self.mode == TimerMode.TIMER:
+             logger.warning(f"Cannot start/resume stopwatch, already running in mode: {self.mode.name}")
+             return f"Already running as {self.mode.name}. Use /stop first."
 
-        self.mode = TimerMode.STOPWATCH
-        self.start_time = time.time()
-        self.paused_time = 0.0 # Reset paused time
-        self.elapsed_time = 0.0
-        self.target_duration = 0.0 # Not used in stopwatch mode
-        self._start_timer_job()
-        logger.info("Stopwatch started.")
-        # Initial display update
-        if self.update_callback:
-            self.update_callback(self._format_time(0))
-        return "Stopwatch started."
+        if self.mode == TimerMode.PAUSED:
+            # Resume logic
+            self.mode = TimerMode.STOPWATCH
+            self.start_time = time.time() # Reset start time for current segment
+            # Keep self.paused_time
+            self._start_timer_job()
+            logger.info(f"Stopwatch resumed. Current elapsed: {self.paused_time:.2f}s")
+            # Update display with current paused time
+            if self.update_callback:
+                 self.update_callback(self._format_time(self.paused_time))
+            return f"Stopwatch resumed at {self._format_time(self.paused_time)}."
+        elif self.mode == TimerMode.STOPPED:
+             # Start fresh logic
+             self.mode = TimerMode.STOPWATCH
+             self.start_time = time.time()
+             self.paused_time = 0.0 # Reset paused time
+             self.elapsed_time = 0.0
+             self.target_duration = 0.0 # Not used in stopwatch mode
+             self._start_timer_job()
+             logger.info("Stopwatch started.")
+             # Initial display update
+             if self.update_callback:
+                 self.update_callback(self._format_time(0))
+             return "Stopwatch started."
+        else:
+             # Should not happen, but handle defensively
+             logger.error(f"Stopwatch start called in unexpected state: {self.mode.name}")
+             return "Cannot start stopwatch due to unexpected state."
 
 
     def start_timer(self, duration_seconds: float) -> str:
-        """Starts a countdown timer."""
+        """Starts a *new* countdown timer. Requires timer to be stopped."""
         if self.mode != TimerMode.STOPPED:
-            logger.warning(f"Cannot start timer, already in mode: {self.mode.name}")
-            return f"Cannot start: Currently in {self.mode.name} mode."
+            logger.warning(f"Cannot start timer, current mode is: {self.mode.name}. Use /reset first.")
+            return f"Please /reset before starting a new timer. Current mode: {self.mode.name}."
         if duration_seconds <= 0:
             return "Timer duration must be positive."
 
+        # Start fresh logic (only runs if mode was STOPPED)
         self.mode = TimerMode.TIMER
         self.target_duration = duration_seconds
         self.start_time = time.time()
@@ -162,38 +181,35 @@ class Timer:
             self.update_callback(self._format_time(self.target_duration))
         return f"Timer started for {self._format_time(self.target_duration)}."
 
-    def stop(self) -> str:
-        """Stops the current stopwatch or timer and holds the current time."""
-        if self.mode == TimerMode.STOPPED:
-            logger.info("Timer/Stopwatch is already stopped.")
-            return "Already stopped."
+    def stop(self) -> str: # This now functions as PAUSE
+        """Pauses the current stopwatch or timer and holds the current time."""
+        if self.mode == TimerMode.STOPPED or self.mode == TimerMode.PAUSED:
+            logger.info(f"Timer/Stopwatch is already {self.mode.name}.")
+            return f"Already {self.mode.name}."
 
-        # Calculate final elapsed time *before* changing mode or stopping job
+        # Calculate elapsed time up to the point of pausing
         current_time = time.time()
         self.elapsed_time = self.paused_time + (current_time - self.start_time)
         self.paused_time = self.elapsed_time # Store the total elapsed time when stopped
 
-        # Stop the job *after* calculating final time but *before* changing mode
+        # Stop the job *after* calculating final time
         self._stop_timer_job()
 
-        final_mode = self.mode # Store mode before changing it
-        self.mode = TimerMode.STOPPED # Set mode to stopped
+        original_mode = self.mode # Store original running mode (STOPWATCH or TIMER)
+        self.mode = TimerMode.PAUSED # Set mode to PAUSED
 
-        logger.info(f"{final_mode.name} stopped. Final elapsed time: {self.elapsed_time:.2f}")
+        logger.info(f"{original_mode.name} paused. Current elapsed time: {self.elapsed_time:.2f}")
 
-        # Determine the time to display upon stopping
-        if final_mode == TimerMode.STOPWATCH:
+        # Determine the time to display upon pausing
+        if original_mode == TimerMode.STOPWATCH:
             display_value = self.elapsed_time
-            return f"Stopwatch stopped at {self._format_time(display_value)}."
-        elif final_mode == TimerMode.TIMER:
+            return f"Stopwatch paused at {self._format_time(display_value)}."
+        elif original_mode == TimerMode.TIMER:
             remaining_time = max(0, self.target_duration - self.elapsed_time)
-            # Update display one last time after stopping
+            # Update display one last time after pausing
             if self.update_callback:
                 self.update_callback(self._format_time(remaining_time))
-            if remaining_time <= 0:
-                 return f"Timer finished at {self._format_time(self.target_duration)}."
-            else:
-                 return f"Timer stopped with {self._format_time(remaining_time)} remaining."
+            return f"Timer paused with {self._format_time(remaining_time)} remaining."
         else:
             # Should not happen
              return "Stopped."
