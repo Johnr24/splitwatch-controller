@@ -25,6 +25,11 @@ telegram_app: Application = None
 DISPLAY_WIDTH: int = 12 # Default display width
 DISPLAY_JUSTIFY: str = "center" # Default justification
 AUTHORIZED_USER_IDS: set[int] = set() # Set of authorized user IDs
+# Home Assistant Integration State
+HA_AUTOMATION_ENTITY_ID: Optional[str] = None
+HA_AUTOMATION_COMMAND_TOPIC: Optional[str] = None
+ha_automation_last_state: Optional[str] = None # Store 'on' or 'off'
+ha_automation_was_on_before_stopwatch: Optional[bool] = None # Store True/False if it was on
 
 # --- Constants ---
 HELP_MESSAGE = (
@@ -78,6 +83,20 @@ def send_initial_blanking_message():
     else:
         logger.error("Cannot send initial blanking message: MQTT handler not ready.")
 
+# --- Home Assistant MQTT Message Handler ---
+def _on_ha_automation_state(topic: str, payload: str):
+    """Handles state updates from the HA automation."""
+    global ha_automation_last_state
+    state = payload.lower()
+    if state in ['on', 'off']:
+        if ha_automation_last_state != state:
+            logger.info(f"HA Automation ({HA_AUTOMATION_ENTITY_ID}) state changed to: {state}")
+            ha_automation_last_state = state
+        else:
+             logger.debug(f"HA Automation ({HA_AUTOMATION_ENTITY_ID}) state update received: {state} (no change)")
+    else:
+        logger.warning(f"Received unexpected state payload for HA Automation: {payload}")
+
 # --- Authorization Check ---
 def is_authorized(update: Update) -> bool:
     """Checks if the user sending the update is authorized."""
@@ -118,6 +137,16 @@ async def sw_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not is_authorized(update):
         await unauthorized_reply(update)
         return
+
+    global ha_automation_was_on_before_stopwatch
+    # --- HA Integration: Turn OFF automation ---
+    if HA_AUTOMATION_COMMAND_TOPIC and mqtt_handler:
+        # Record current state *before* turning it off
+        ha_automation_was_on_before_stopwatch = (ha_automation_last_state == 'on')
+        logger.info(f"Stopwatch starting. HA Automation ({HA_AUTOMATION_ENTITY_ID}) was: {'ON' if ha_automation_was_on_before_stopwatch else 'OFF'}. Turning OFF.")
+        mqtt_handler.publish(HA_AUTOMATION_COMMAND_TOPIC, "OFF")
+    # --- End HA Integration ---
+
     if timer:
         message = timer.start_stopwatch()
         await update.message.reply_text(message)
@@ -165,8 +194,26 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not is_authorized(update):
         await unauthorized_reply(update)
         return
+
+    global ha_automation_was_on_before_stopwatch
+    was_stopwatch = timer and timer.mode == TimerMode.STOPWATCH # Check *before* stopping
+
     if timer:
-        message = timer.stop()
+        message = timer.stop() # This stops the timer/stopwatch
+
+        # --- HA Integration: Restore automation state ---
+        if was_stopwatch and HA_AUTOMATION_COMMAND_TOPIC and mqtt_handler:
+            if ha_automation_was_on_before_stopwatch is True:
+                logger.info(f"Stopwatch stopped. HA Automation ({HA_AUTOMATION_ENTITY_ID}) was ON before. Turning back ON.")
+                mqtt_handler.publish(HA_AUTOMATION_COMMAND_TOPIC, "ON")
+            elif ha_automation_was_on_before_stopwatch is False:
+                 logger.info(f"Stopwatch stopped. HA Automation ({HA_AUTOMATION_ENTITY_ID}) was OFF before. Leaving OFF.")
+            else:
+                 # State was unknown when stopwatch started
+                 logger.warning(f"Stopwatch stopped. Previous HA Automation state ({HA_AUTOMATION_ENTITY_ID}) was unknown. Taking no action.")
+            ha_automation_was_on_before_stopwatch = None # Reset tracker
+        # --- End HA Integration ---
+
         await update.message.reply_text(message)
     else:
         await update.message.reply_text("Timer not initialized.")
@@ -176,8 +223,26 @@ async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not is_authorized(update):
         await unauthorized_reply(update)
         return
+
+    global ha_automation_was_on_before_stopwatch
+    was_stopwatch = timer and timer.mode == TimerMode.STOPWATCH # Check *before* resetting
+
     if timer:
-        message = timer.reset()
+        message = timer.reset() # This resets the timer/stopwatch
+
+        # --- HA Integration: Restore automation state ---
+        if was_stopwatch and HA_AUTOMATION_COMMAND_TOPIC and mqtt_handler:
+             if ha_automation_was_on_before_stopwatch is True:
+                 logger.info(f"Stopwatch reset. HA Automation ({HA_AUTOMATION_ENTITY_ID}) was ON before. Turning back ON.")
+                 mqtt_handler.publish(HA_AUTOMATION_COMMAND_TOPIC, "ON")
+             elif ha_automation_was_on_before_stopwatch is False:
+                 logger.info(f"Stopwatch reset. HA Automation ({HA_AUTOMATION_ENTITY_ID}) was OFF before. Leaving OFF.")
+             else:
+                 # State was unknown when stopwatch started
+                 logger.warning(f"Stopwatch reset. Previous HA Automation state ({HA_AUTOMATION_ENTITY_ID}) was unknown. Taking no action.")
+             ha_automation_was_on_before_stopwatch = None # Reset tracker
+        # --- End HA Integration ---
+
         await update.message.reply_text(message)
     else:
         await update.message.reply_text("Timer not initialized.")
@@ -306,6 +371,7 @@ async def shutdown(signal_num):
 def main() -> None:
     """Start the bot."""
     global mqtt_handler, timer, telegram_app, DISPLAY_WIDTH, DISPLAY_JUSTIFY, AUTHORIZED_USER_IDS
+    global HA_AUTOMATION_ENTITY_ID, HA_AUTOMATION_COMMAND_TOPIC # Add HA globals
 
     # --- Load Environment Variables ---
     load_dotenv()
@@ -340,6 +406,22 @@ def main() -> None:
     else:
         logger.warning("AUTHORIZED_USER_IDS is not set in the environment. No users will be authorized.")
         AUTHORIZED_USER_IDS = set()
+    # Load HA config
+    HA_AUTOMATION_ENTITY_ID = os.getenv("HA_AUTOMATION_ENTITY_ID")
+    HA_MQTT_DISCOVERY_PREFIX = os.getenv("HA_MQTT_DISCOVERY_PREFIX", "homeassistant") # Default prefix
+
+    ha_automation_state_topic = None
+    if HA_AUTOMATION_ENTITY_ID:
+        # Derive topics assuming standard HA structure: <prefix>/<component>/<node_id>/<object_id>/<suffix>
+        # For automation: <prefix>/automation/<entity_id without domain>/state or /set
+        entity_id_part = HA_AUTOMATION_ENTITY_ID.split('.')[-1] # Get 'timesplitters_2' from 'automation.timesplitters_2'
+        HA_AUTOMATION_COMMAND_TOPIC = f"{HA_MQTT_DISCOVERY_PREFIX}/automation/{entity_id_part}/set"
+        ha_automation_state_topic = f"{HA_MQTT_DISCOVERY_PREFIX}/automation/{entity_id_part}/state"
+        logger.info(f"HA Integration Enabled for: {HA_AUTOMATION_ENTITY_ID}")
+        logger.info(f"  Command Topic: {HA_AUTOMATION_COMMAND_TOPIC}")
+        logger.info(f"  State Topic: {ha_automation_state_topic}")
+    else:
+        logger.info("HA Integration Disabled (HA_AUTOMATION_ENTITY_ID not set).")
 
 
     # --- Validate Environment Variables ---
@@ -365,6 +447,10 @@ def main() -> None:
         on_connect_callback=send_initial_blanking_message
     )
     mqtt_handler.connect() # Connect MQTT (will trigger blanking message on success)
+
+    # --- Subscribe to HA State Topic (if enabled) ---
+    if ha_automation_state_topic and mqtt_handler:
+        mqtt_handler.subscribe(ha_automation_state_topic, _on_ha_automation_state)
 
     logger.info("Initializing Timer...")
     timer = Timer(update_callback=update_display)
