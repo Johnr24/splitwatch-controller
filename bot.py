@@ -298,6 +298,45 @@ async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     else:
         await update.message.reply_text("Timer not initialized.")
 
+async def quit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Stops the timer/stopwatch completely, restores HA state, and clears display."""
+    if not is_authorized(update):
+        await unauthorized_reply(update)
+        return
+
+    global ha_automation_was_on_before_stopwatch
+    was_stopwatch = timer and timer.mode == TimerMode.STOPWATCH # Check if it was running as stopwatch before reset
+
+    if timer:
+        # Reset the timer first (stops job, clears internal state)
+        reset_message = timer.reset() # This also sends 00:00:00 to display via callback
+
+        # --- HA Integration: Restore automation state ---
+        # This logic runs if the timer *was* a stopwatch before being reset
+        if was_stopwatch and HA_AUTOMATION_COMMAND_TOPIC and mqtt_handler:
+            if ha_automation_was_on_before_stopwatch is True:
+                logger.info(f"Quit command: HA Automation ({HA_AUTOMATION_ENTITY_ID}) was ON before. Turning back ON.")
+                # Publish ON command - need to await the publish
+                await mqtt_handler.publish(HA_AUTOMATION_COMMAND_TOPIC, "ON")
+            elif ha_automation_was_on_before_stopwatch is False:
+                 logger.info(f"Quit command: HA Automation ({HA_AUTOMATION_ENTITY_ID}) was OFF before. Leaving OFF.")
+            else:
+                 # State was unknown when stopwatch started
+                 logger.warning(f"Quit command: Previous HA Automation state ({HA_AUTOMATION_ENTITY_ID}) was unknown. Taking no action.")
+            # Reset the tracker regardless of action taken
+            ha_automation_was_on_before_stopwatch = None
+        # --- End HA Integration ---
+
+        # Explicitly clear the display after quitting
+        logger.info("Quit command: Clearing display.")
+        await send_initial_blanking_message() # Send blank message
+
+        await update.message.reply_text(f"{reset_message}\nQuit successful. Display cleared and HA automation restored (if applicable).")
+
+    else:
+        await update.message.reply_text("Timer not initialized.")
+
+
 async def split_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Records a split time."""
     if not is_authorized(update):
