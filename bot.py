@@ -8,7 +8,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 from mqtt_handler import MQTTHandler
-from timer import Timer
+from timer import Timer, TimerMode # Import TimerMode here
 
 # --- Logging Setup ---
 logging.basicConfig(
