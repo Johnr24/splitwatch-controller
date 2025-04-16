@@ -578,13 +578,46 @@ def main() -> None:
     telegram_app.add_handler(MessageHandler(filters.COMMAND, unknown_command))
 
     # --- Setup Signal Handlers for Graceful Shutdown ---
-    loop = asyncio.get_event_loop()
+    # Get the current event loop
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:  # 'RuntimeError: There is no current event loop...'
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
     for sig in [signal.SIGINT, signal.SIGTERM]:
         loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(shutdown(s)))
 
+    # --- Schedule Post-Connection Tasks (Discovery, Initial State) ---
+    async def run_post_connection_tasks():
+        # Add a delay to allow MQTT connection to establish
+        # Adjust delay as needed based on network/broker speed
+        connection_delay = 5
+        logger.info(f"Waiting {connection_delay} seconds for MQTT connection before publishing discovery...")
+        await asyncio.sleep(connection_delay)
+
+        # Check if MQTT seems connected (basic check)
+        if mqtt_handler and mqtt_handler.client.is_connected():
+             logger.info("MQTT likely connected. Publishing initial states and discovery...")
+             # Publish initial states first
+             if timer:
+                 await _status_update_callback(timer.mode) # Publish current status
+                 await update_display(timer._format_time(0)) # Publish initial time "00:00:00"
+             # Publish discovery messages
+             await publish_ha_discovery()
+        else:
+             logger.error("MQTT client not connected after delay. Skipping discovery publishing.")
+
+    # Schedule the post-connection tasks to run in the background
+    if HA_MQTT_DISCOVERY_ENABLED:
+        loop.create_task(run_post_connection_tasks())
+
     # --- Run the Bot ---
     logger.info("Starting Telegram Bot Polling...")
+    # Use run_until_complete on the polling task if not using run_polling directly
+    # Or simply run polling which blocks until shutdown
     telegram_app.run_polling(allowed_updates=Update.ALL_TYPES)
+
 
     # Code here will run after the bot stops (e.g., after shutdown)
     logger.info("Bot has stopped.")
