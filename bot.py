@@ -225,25 +225,11 @@ async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await unauthorized_reply(update)
         return
 
-    global ha_automation_was_on_before_stopwatch
-    was_stopwatch = timer and timer.mode == TimerMode.STOPWATCH # Check *before* resetting
+    # Reset command should only affect the internal timer state.
+    # HA automation state restoration happens only on /stop.
 
     if timer:
         message = timer.reset() # This resets the timer/stopwatch
-
-        # --- HA Integration: Restore automation state ---
-        if was_stopwatch and HA_AUTOMATION_COMMAND_TOPIC and mqtt_handler:
-             if ha_automation_was_on_before_stopwatch is True:
-                 logger.info(f"Stopwatch reset. HA Automation ({HA_AUTOMATION_ENTITY_ID}) was ON before. Turning back ON.")
-                 mqtt_handler.publish(HA_AUTOMATION_COMMAND_TOPIC, "ON")
-             elif ha_automation_was_on_before_stopwatch is False:
-                 logger.info(f"Stopwatch reset. HA Automation ({HA_AUTOMATION_ENTITY_ID}) was OFF before. Leaving OFF.")
-             else:
-                 # State was unknown when stopwatch started
-                 logger.warning(f"Stopwatch reset. Previous HA Automation state ({HA_AUTOMATION_ENTITY_ID}) was unknown. Taking no action.")
-             ha_automation_was_on_before_stopwatch = None # Reset tracker
-        # --- End HA Integration ---
-
         await update.message.reply_text(message)
     else:
         await update.message.reply_text("Timer not initialized.")
