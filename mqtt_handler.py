@@ -95,14 +95,26 @@ class MQTTHandler:
         self.client.loop_stop() # Stop background thread
         self.client.disconnect()
 
-    def publish(self, payload):
-        """Publishes a message to the configured MQTT topic."""
+    def publish(self, payload: str, topic: Optional[str] = None):
+        """
+        Publishes a message to an MQTT topic.
+
+        Args:
+            payload: The message payload to send.
+            topic: The MQTT topic to publish to. If None, defaults to the main topic
+                   configured during initialization (`self.topic`).
+        """
+        publish_topic = topic if topic is not None else self.topic
+        if not publish_topic:
+             logger.error("Cannot publish: No topic specified and no default topic set.")
+             return
+
         if self.client.is_connected():
-            result = self.client.publish(self.topic, payload)
+            result = self.client.publish(publish_topic, payload)
             if result.rc == paho_mqtt.MQTT_ERR_SUCCESS:
-                logger.debug(f"Published message to topic '{self.topic}': {payload}")
+                logger.debug(f"Published message to topic '{publish_topic}': {payload}")
             else:
-                logger.warning(f"Failed to publish message to topic '{self.topic}'. RC: {result.rc}")
+                logger.warning(f"Failed to publish message to topic '{publish_topic}'. RC: {result.rc}")
         else:
             logger.warning("MQTT client not connected. Cannot publish message.")
 
