@@ -24,6 +24,7 @@ timer: Timer = None
 telegram_app: Application = None
 DISPLAY_WIDTH: int = 12 # Default display width
 DISPLAY_JUSTIFY: str = "center" # Default justification
+AUTHORIZED_USER_IDS: set[int] = set() # Set of authorized user IDs
 
 # --- Constants ---
 HELP_MESSAGE = (
@@ -77,19 +78,46 @@ def send_initial_blanking_message():
     else:
         logger.error("Cannot send initial blanking message: MQTT handler not ready.")
 
+# --- Authorization Check ---
+def is_authorized(update: Update) -> bool:
+    """Checks if the user sending the update is authorized."""
+    if not AUTHORIZED_USER_IDS: # If the list is empty, allow everyone (optional, could default to deny)
+        # logger.warning("AUTHORIZED_USER_IDS is empty. Allowing all users.")
+        # return True
+        # Let's default to denying if the list is empty or not set correctly.
+        logger.warning("AUTHORIZED_USER_IDS is not configured. Denying access.")
+        return False
+    user_id = update.effective_user.id
+    if user_id not in AUTHORIZED_USER_IDS:
+        logger.warning(f"Unauthorized access attempt by user ID: {user_id}")
+        return False
+    return True
+
+async def unauthorized_reply(update: Update):
+    """Sends a standard message to unauthorized users."""
+    await update.message.reply_text("Sorry, you are not authorized to use this bot.")
 
 # --- Telegram Command Handlers ---
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Sends explanation on how to use the bot."""
+    if not is_authorized(update):
+        await unauthorized_reply(update)
+        return
     # Also update the help message constant if commands change
     await update.message.reply_text(HELP_MESSAGE)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Sends the help message."""
+    if not is_authorized(update):
+        await unauthorized_reply(update)
+        return
     await update.message.reply_text(HELP_MESSAGE)
 
 async def sw_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Starts the stopwatch."""
+    if not is_authorized(update):
+        await unauthorized_reply(update)
+        return
     if timer:
         message = timer.start_stopwatch()
         await update.message.reply_text(message)
@@ -98,6 +126,9 @@ async def sw_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def timer_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Starts a countdown timer."""
+    if not is_authorized(update):
+        await unauthorized_reply(update)
+        return
     if not timer:
         await update.message.reply_text("Timer not initialized.")
         return
@@ -131,6 +162,9 @@ async def timer_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Stops the current timer or stopwatch."""
+    if not is_authorized(update):
+        await unauthorized_reply(update)
+        return
     if timer:
         message = timer.stop()
         await update.message.reply_text(message)
@@ -139,6 +173,9 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Resets the timer or stopwatch."""
+    if not is_authorized(update):
+        await unauthorized_reply(update)
+        return
     if timer:
         message = timer.reset()
         await update.message.reply_text(message)
@@ -147,6 +184,9 @@ async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def split_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Records a split time."""
+    if not is_authorized(update):
+        await unauthorized_reply(update)
+        return
     if timer:
         message = timer.split()
         await update.message.reply_text(message)
@@ -155,6 +195,9 @@ async def split_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def add_time_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Adds time to the timer."""
+    if not is_authorized(update):
+        await unauthorized_reply(update)
+        return
     if not timer:
         await update.message.reply_text("Timer not initialized.")
         return
@@ -186,6 +229,9 @@ async def add_time_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def sub_time_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Subtracts time from the timer."""
+    if not is_authorized(update):
+        await unauthorized_reply(update)
+        return
     if not timer:
         await update.message.reply_text("Timer not initialized.")
         return
@@ -216,6 +262,9 @@ async def sub_time_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Shows the current status."""
+    if not is_authorized(update):
+        await unauthorized_reply(update)
+        return
     if timer:
         message = timer.get_status()
         await update.message.reply_text(message)
@@ -224,6 +273,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles unknown commands."""
+    # No authorization check here, just inform the user (authorized or not)
     await update.message.reply_text("Sorry, I didn't understand that command.")
 
 # --- Graceful Shutdown ---
@@ -255,7 +305,7 @@ async def shutdown(signal_num):
 # --- Main Execution ---
 def main() -> None:
     """Start the bot."""
-    global mqtt_handler, timer, telegram_app, DISPLAY_WIDTH, DISPLAY_JUSTIFY
+    global mqtt_handler, timer, telegram_app, DISPLAY_WIDTH, DISPLAY_JUSTIFY, AUTHORIZED_USER_IDS
 
     # --- Load Environment Variables ---
     load_dotenv()
@@ -278,6 +328,18 @@ def main() -> None:
     if DISPLAY_JUSTIFY not in ["left", "center", "right"]:
         logger.warning(f"Invalid DISPLAY_JUSTIFY value '{DISPLAY_JUSTIFY}'. Using default 'center'.")
         DISPLAY_JUSTIFY = "center"
+    # Load authorized user IDs
+    auth_users_str = os.getenv("AUTHORIZED_USER_IDS", "")
+    if auth_users_str:
+        try:
+            AUTHORIZED_USER_IDS = {int(user_id.strip()) for user_id in auth_users_str.split(',') if user_id.strip()}
+            logger.info(f"Loaded {len(AUTHORIZED_USER_IDS)} authorized user IDs.")
+        except ValueError:
+            logger.error("Invalid format in AUTHORIZED_USER_IDS. Please use comma-separated numbers. No users authorized.")
+            AUTHORIZED_USER_IDS = set()
+    else:
+        logger.warning("AUTHORIZED_USER_IDS is not set in the environment. No users will be authorized.")
+        AUTHORIZED_USER_IDS = set()
 
 
     # --- Validate Environment Variables ---
