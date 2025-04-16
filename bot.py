@@ -523,6 +523,36 @@ def main() -> None:
         # Ensure Shelly ID is None if not fully configured
         HA_SHELLY_SWITCH_ENTITY_ID = None
 
+    # Load HA MQTT Discovery config
+    HA_MQTT_DISCOVERY_ENABLED = os.getenv("HA_MQTT_DISCOVERY_ENABLED", "false").lower() == "true"
+    HA_MQTT_DISCOVERY_PREFIX = os.getenv("HA_MQTT_DISCOVERY_PREFIX", "homeassistant")
+    HA_MQTT_NODE_ID = os.getenv("HA_MQTT_NODE_ID", "splitwatch_bot")
+
+    if HA_MQTT_DISCOVERY_ENABLED:
+        logger.info("HA MQTT Discovery Enabled.")
+        logger.info(f"  Discovery Prefix: {HA_MQTT_DISCOVERY_PREFIX}")
+        logger.info(f"  Node ID: {HA_MQTT_NODE_ID}")
+        # Define base topics for state and commands relative to the node ID
+        base_topic_path = f"splitwatch/{HA_MQTT_NODE_ID}" # e.g., splitwatch/splitwatch_bot
+        HA_STATUS_STATE_TOPIC = f"{base_topic_path}/status"
+        HA_TIME_STATE_TOPIC = f"{base_topic_path}/time"
+        HA_COMMAND_TOPIC = f"{base_topic_path}/command"
+        logger.info(f"  Status Topic: {HA_STATUS_STATE_TOPIC}")
+        logger.info(f"  Time Topic: {HA_TIME_STATE_TOPIC}")
+        logger.info(f"  Command Topic: {HA_COMMAND_TOPIC}")
+
+        # Define the Device Info for HA Discovery
+        HA_DEVICE_INFO = {
+            "identifiers": [HA_MQTT_NODE_ID],
+            "name": "SplitWatch Bot",
+            "manufacturer": "SplitWatch Project", # Or your name/handle
+            "model": "Telegram MQTT Bot",
+            "sw_version": "1.0", # Consider making this dynamic later
+            # "via_device": "MQTT Broker" # Optional: if it's connected via another HA device
+        }
+    else:
+        logger.info("HA MQTT Discovery Disabled.")
+
 
     # --- Validate Environment Variables ---
     if not TELEGRAM_TOKEN:
