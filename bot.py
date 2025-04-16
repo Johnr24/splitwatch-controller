@@ -29,6 +29,8 @@ AUTHORIZED_USER_IDS: set[int] = set() # Set of authorized user IDs
 # Home Assistant Integration State
 HA_AUTOMATION_ENTITY_ID: Optional[str] = None
 HA_AUTOMATION_COMMAND_TOPIC: Optional[str] = None
+HA_SHELLY_SWITCH_ENTITY_ID: Optional[str] = None
+HA_SHELLY_SWITCH_COMMAND_TOPIC: Optional[str] = None
 ha_automation_last_state: Optional[str] = None # Store 'on' or 'off'
 ha_automation_was_on_before_stopwatch: Optional[bool] = None # Store True/False if it was on
 initial_blanking_sent: bool = False # Flag to track if initial blanking message was sent
@@ -45,7 +47,8 @@ HELP_MESSAGE = (
     "/add MM:SS [or SS] - Add time (timer)\n"
     "/sub MM:SS [or SS] - Subtract time (timer)\n"
     "/status - Show current status\n"
-    "/help - Show this help message"
+    "/help - Show this help message\n"
+    "/pw - Power cycle the display controller"
 )
 
 # --- MQTT Update Callback ---
@@ -373,7 +376,7 @@ async def shutdown(signal_num):
 def main() -> None:
     """Start the bot."""
     global mqtt_handler, timer, telegram_app, DISPLAY_WIDTH, DISPLAY_JUSTIFY, AUTHORIZED_USER_IDS
-    global HA_AUTOMATION_ENTITY_ID, HA_AUTOMATION_COMMAND_TOPIC # Add HA globals
+    global HA_AUTOMATION_ENTITY_ID, HA_AUTOMATION_COMMAND_TOPIC, HA_SHELLY_SWITCH_ENTITY_ID, HA_SHELLY_SWITCH_COMMAND_TOPIC # Add HA globals
 
     # --- Load Environment Variables ---
     load_dotenv()
@@ -410,9 +413,11 @@ def main() -> None:
         AUTHORIZED_USER_IDS = set()
     # Load HA config
     HA_AUTOMATION_ENTITY_ID = os.getenv("HA_AUTOMATION_ENTITY_ID")
+    HA_SHELLY_SWITCH_ENTITY_ID = os.getenv("HA_SHELLY_SWITCH_ENTITY_ID")
     HA_MQTT_DISCOVERY_PREFIX = os.getenv("HA_MQTT_DISCOVERY_PREFIX", "homeassistant") # Default prefix
 
     ha_automation_state_topic = None
+    # Derive Automation topics
     if HA_AUTOMATION_ENTITY_ID:
         # Derive topics assuming standard HA structure: <prefix>/<component>/<node_id>/<object_id>/<suffix>
         # For automation: <prefix>/automation/<entity_id without domain>/state or /set
@@ -423,7 +428,19 @@ def main() -> None:
         logger.info(f"  Command Topic: {HA_AUTOMATION_COMMAND_TOPIC}")
         logger.info(f"  State Topic: {ha_automation_state_topic}")
     else:
-        logger.info("HA Integration Disabled (HA_AUTOMATION_ENTITY_ID not set).")
+        logger.info("HA Automation Integration Disabled (HA_AUTOMATION_ENTITY_ID not set).")
+
+    # Derive Shelly Switch topics
+    if HA_SHELLY_SWITCH_ENTITY_ID:
+         # Derive topics assuming standard HA structure: <prefix>/<component>/<node_id>/<object_id>/<suffix>
+         # For switch: <prefix>/switch/<entity_id without domain>/set
+         entity_id_part = HA_SHELLY_SWITCH_ENTITY_ID.split('.')[-1]
+         HA_SHELLY_SWITCH_COMMAND_TOPIC = f"{HA_MQTT_DISCOVERY_PREFIX}/switch/{entity_id_part}/set"
+         logger.info(f"HA Shelly Switch Control Enabled for: {HA_SHELLY_SWITCH_ENTITY_ID}")
+         logger.info(f"  Command Topic: {HA_SHELLY_SWITCH_COMMAND_TOPIC}")
+         # We don't need to subscribe to the Shelly state for this command
+    else:
+        logger.info("HA Shelly Switch Control Disabled (HA_SHELLY_SWITCH_ENTITY_ID not set).")
 
 
     # --- Validate Environment Variables ---
@@ -474,6 +491,7 @@ def main() -> None:
     telegram_app.add_handler(CommandHandler("add", add_time_command))
     telegram_app.add_handler(CommandHandler("sub", sub_time_command))
     telegram_app.add_handler(CommandHandler("status", status_command))
+    telegram_app.add_handler(CommandHandler("pw", power_cycle_command)) # Add power cycle command
 
     # Handler for unknown commands - must be last
     telegram_app.add_handler(MessageHandler(filters.COMMAND, unknown_command))
