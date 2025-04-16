@@ -12,7 +12,7 @@ from typing import Callable, Optional
 class MQTTHandler:
     """Handles MQTT connection and publishing."""
 
-    def __init__(self, broker_address: str, broker_port: int, topic: str, username: Optional[str] = None, password: Optional[str] = None, on_connect_callback: Optional[Callable[[], None]] = None):
+    def __init__(self, broker_address: str, broker_port: int, topic: str, username: Optional[str] = None, password: Optional[str] = None):
         """
         Initializes the MQTT client.
 
@@ -22,14 +22,13 @@ class MQTTHandler:
             topic: The MQTT topic to publish to.
             username: Optional MQTT username.
             password: Optional MQTT password.
-            on_connect_callback: Optional callback function to execute on successful connection.
         """
         self.broker_address = broker_address
         self.broker_port = int(broker_port)
         self.topic = topic
         self.username = username
         self.password = password
-        self._on_connect_callback = on_connect_callback # Store the callback
+        # self._on_connect_callback = on_connect_callback # Removed: Blanking is no longer triggered on connect
         self.client = paho_mqtt.Client() # Removed CallbackAPIVersion argument for paho-mqtt v1.x compatibility
         self._message_callbacks = {} # topic -> callback function
         self.client.on_connect = self._on_connect
@@ -47,12 +46,12 @@ class MQTTHandler:
             # Resubscribe to topics upon reconnection
             for topic in self._message_callbacks:
                 self._subscribe(topic)
-            # Execute the main on_connect callback if connection was successful and callback exists
-            if self._on_connect_callback:
-                try:
-                    self._on_connect_callback()
-                except Exception as e:
-                    logger.error(f"Error executing on_connect_callback: {e}")
+            # Removed: Blanking is no longer triggered on connect
+            # if self._on_connect_callback:
+            #     try:
+            #         self._on_connect_callback()
+            #     except Exception as e:
+            #         logger.error(f"Error executing on_connect_callback: {e}")
         else:
             logger.error(f"Failed to connect to MQTT Broker, return code {rc}")
 

@@ -120,17 +120,31 @@ async def unauthorized_reply(update: Update):
 # --- Telegram Command Handlers ---
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Sends explanation on how to use the bot."""
+    global initial_blanking_sent
     if not is_authorized(update):
         await unauthorized_reply(update)
         return
+
+    # Send initial blanking message on first authorized command
+    if not initial_blanking_sent:
+        send_initial_blanking_message()
+        initial_blanking_sent = True
+
     # Also update the help message constant if commands change
     await update.message.reply_text(HELP_MESSAGE)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Sends the help message."""
+    global initial_blanking_sent
     if not is_authorized(update):
         await unauthorized_reply(update)
         return
+
+    # Send initial blanking message on first authorized command
+    if not initial_blanking_sent:
+        send_initial_blanking_message()
+        initial_blanking_sent = True
+
     await update.message.reply_text(HELP_MESSAGE)
 
 async def sw_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -424,16 +438,16 @@ def main() -> None:
 
     # --- Initialize Components ---
     logger.info("Initializing MQTT Handler...")
-    # Pass the blanking function as the on_connect_callback
+    # Removed on_connect_callback argument
     mqtt_handler = MQTTHandler(
         MQTT_BROKER,
         MQTT_PORT,
         MQTT_TOPIC,
         MQTT_USER,
-        MQTT_PASS,
-        on_connect_callback=send_initial_blanking_message
+        MQTT_PASS
+        # on_connect_callback=send_initial_blanking_message # Removed
     )
-    mqtt_handler.connect() # Connect MQTT (will trigger blanking message on success)
+    mqtt_handler.connect() # Connect MQTT
 
     # --- Subscribe to HA State Topic (if enabled) ---
     if ha_automation_state_topic and mqtt_handler:
