@@ -15,13 +15,17 @@ class TimerMode(Enum):
 class Timer:
     """Manages stopwatch and timer functionality."""
 
-    def __init__(self, update_callback: Optional[Callable[[str], None]] = None):
+    def __init__(self,
+                 update_callback: Optional[Callable[[str], None]] = None,
+                 status_update_callback: Optional[Callable[[TimerMode], None]] = None):
         """
         Initializes the Timer.
 
         Args:
-            update_callback (callable, optional): A function to call each second with the formatted time string.
-                                                  Signature: callback(formatted_time: str). Defaults to None.
+            update_callback (callable, optional): Async function called each second with the formatted time string.
+                                                  Signature: async callback(formatted_time: str). Defaults to None.
+            status_update_callback (callable, optional): Async function called when the timer mode changes.
+                                                         Signature: async callback(new_mode: TimerMode). Defaults to None.
         """
         self.mode = TimerMode.STOPPED
         self.start_time = 0.0
@@ -29,8 +33,18 @@ class Timer:
         self.target_duration = 0.0 # For timer mode
         self.paused_time = 0.0 # Time elapsed when paused
         self.update_callback = update_callback
+        self.status_update_callback = status_update_callback # Store the new callback
         self.job_queue = None # Will be set by the bot to schedule ticks (from telegram.ext.JobQueue)
         self.timer_job = None # Holds the Job instance from JobQueue
+
+    async def _publish_status_update(self, new_mode: TimerMode):
+        """Safely calls the status update callback if it exists."""
+        if self.status_update_callback:
+            try:
+                # status_update_callback is expected to be async
+                await self.status_update_callback(new_mode)
+            except Exception as e:
+                logger.error(f"Error in async status_update_callback: {e}")
 
     def _format_time(self, seconds: float) -> str:
         """Formats seconds into HH:MM:SS."""
@@ -131,18 +145,23 @@ class Timer:
 
         if self.mode == TimerMode.PAUSED:
             # Resume logic
-            self.mode = TimerMode.STOPWATCH
+            new_mode = TimerMode.STOPWATCH
+            self.mode = new_mode
             self.start_time = time.time() # Reset start time for current segment
             # Keep self.paused_time
             self._start_timer_job()
             logger.info(f"Stopwatch resumed. Current elapsed: {self.paused_time:.2f}s")
             # Update display with current paused time
             if self.update_callback:
-                 self.update_callback(self._format_time(self.paused_time))
+                 # This callback is now async
+                 await self.update_callback(self._format_time(self.paused_time))
+            # Publish status update
+            await self._publish_status_update(new_mode)
             return f"Stopwatch resumed at {self._format_time(self.paused_time)}."
         elif self.mode == TimerMode.STOPPED:
              # Start fresh logic
-             self.mode = TimerMode.STOPWATCH
+             new_mode = TimerMode.STOPWATCH
+             self.mode = new_mode
              self.start_time = time.time()
              self.paused_time = 0.0 # Reset paused time
              self.elapsed_time = 0.0
@@ -151,7 +170,9 @@ class Timer:
              logger.info("Stopwatch started.")
              # Initial display update
              if self.update_callback:
-                 self.update_callback(self._format_time(0))
+                 await self.update_callback(self._format_time(0)) # Await async callback
+             # Publish status update
+             await self._publish_status_update(new_mode)
              return "Stopwatch started."
         else:
              # Should not happen, but handle defensively
@@ -168,7 +189,8 @@ class Timer:
             return "Timer duration must be positive."
 
         # Start fresh logic (only runs if mode was STOPPED)
-        self.mode = TimerMode.TIMER
+        new_mode = TimerMode.TIMER
+        self.mode = new_mode
         self.target_duration = duration_seconds
         self.start_time = time.time()
         self.paused_time = 0.0 # Reset paused time
@@ -177,10 +199,12 @@ class Timer:
         logger.info(f"Timer started for {duration_seconds} seconds.")
          # Initial display update
         if self.update_callback:
-            self.update_callback(self._format_time(self.target_duration))
+            await self.update_callback(self._format_time(self.target_duration)) # Await async callback
+        # Publish status update
+        await self._publish_status_update(new_mode)
         return f"Timer started for {self._format_time(self.target_duration)}."
 
-    def stop(self) -> str: # This now functions as PAUSE
+    async def stop(self) -> str: # This now functions as PAUSE and needs to be async
         """Pauses the current stopwatch or timer and holds the current time."""
         if self.mode == TimerMode.STOPPED or self.mode == TimerMode.PAUSED:
             logger.info(f"Timer/Stopwatch is already {self.mode.name}.")
@@ -195,9 +219,13 @@ class Timer:
         self._stop_timer_job()
 
         original_mode = self.mode # Store original running mode (STOPWATCH or TIMER)
-        self.mode = TimerMode.PAUSED # Set mode to PAUSED
+        new_mode = TimerMode.PAUSED
+        self.mode = new_mode # Set mode to PAUSED
 
         logger.info(f"{original_mode.name} paused. Current elapsed time: {self.elapsed_time:.2f}")
+
+        # Publish status update *before* returning
+        await self._publish_status_update(new_mode)
 
         # Determine the time to display upon pausing
         if original_mode == TimerMode.STOPWATCH:
@@ -207,19 +235,20 @@ class Timer:
             remaining_time = max(0, self.target_duration - self.elapsed_time)
             # Update display one last time after pausing
             if self.update_callback:
-                self.update_callback(self._format_time(remaining_time))
+                await self.update_callback(self._format_time(remaining_time)) # Await async callback
             return f"Timer paused with {self._format_time(remaining_time)} remaining."
         else:
             # Should not happen
              return "Stopped."
 
 
-    def reset(self) -> str:
+    async def reset(self) -> str: # Needs to be async
         """Resets the timer/stopwatch to zero and stopped state."""
         was_running = self.mode != TimerMode.STOPPED
         self._stop_timer_job() # Stop job if running
 
-        self.mode = TimerMode.STOPPED
+        new_mode = TimerMode.STOPPED
+        self.mode = new_mode
         self.start_time = 0.0
         self.elapsed_time = 0.0
         self.target_duration = 0.0
@@ -227,7 +256,9 @@ class Timer:
         logger.info("Timer/Stopwatch reset.")
         # Update display to 00:00:00
         if self.update_callback:
-            self.update_callback(self._format_time(0))
+            await self.update_callback(self._format_time(0)) # Await async callback
+        # Publish status update
+        await self._publish_status_update(new_mode)
         return "Timer/Stopwatch reset."
 
     # TODO: Implement split persistence if needed (e.g., store splits in a list)
@@ -255,11 +286,11 @@ class Timer:
         # Update display immediately if timer is running or paused
         remaining_time = max(0, self.target_duration - self.elapsed_time)
         if self.update_callback:
-            self.update_callback(self._format_time(remaining_time))
+            await self.update_callback(self._format_time(remaining_time)) # Await async callback
 
         return f"Added {self._format_time(seconds_to_add)}. New target duration: {self._format_time(self.target_duration)}. Remaining: {self._format_time(remaining_time)}"
 
-    def subtract_time(self, seconds_to_subtract: float) -> str:
+    async def subtract_time(self, seconds_to_subtract: float) -> str: # Needs to be async
         """Subtracts time from the timer's target duration (timer mode only)."""
         if self.mode != TimerMode.TIMER:
             return "Can only subtract time in timer mode."
@@ -275,12 +306,12 @@ class Timer:
         # Update display immediately if timer is running or paused
         remaining_time = max(0, self.target_duration - self.elapsed_time)
         if self.update_callback:
-            self.update_callback(self._format_time(remaining_time))
+            await self.update_callback(self._format_time(remaining_time)) # Await async callback
 
         # Check if subtracting time caused the timer to finish
         if remaining_time <= 0 and self.mode == TimerMode.TIMER:
              logger.info("Timer finished due to time subtraction.")
-             self.stop() # Stop the timer properly
+             await self.stop() # Stop the timer properly (now async)
              return f"Subtracted {self._format_time(seconds_to_subtract)}. Timer finished."
         else:
              return f"Subtracted {self._format_time(seconds_to_subtract)}. New target duration: {self._format_time(self.target_duration)}. Remaining: {self._format_time(remaining_time)}"
