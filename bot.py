@@ -31,6 +31,7 @@ HA_AUTOMATION_ENTITY_ID: Optional[str] = None
 HA_AUTOMATION_COMMAND_TOPIC: Optional[str] = None
 ha_automation_last_state: Optional[str] = None # Store 'on' or 'off'
 ha_automation_was_on_before_stopwatch: Optional[bool] = None # Store True/False if it was on
+initial_blanking_sent: bool = False # Flag to track if initial blanking message was sent
 
 # --- Constants ---
 HELP_MESSAGE = (
