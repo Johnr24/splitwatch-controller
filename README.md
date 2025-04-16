@@ -51,7 +51,7 @@ A Telegram bot 🤖 designed to control a split-flap display, primarily function
 
 Interact with the bot via Telegram using the following commands:
 
-*   `/start`, `/help`: ℹ️ Show the help message.
+*   `/start`, `/help`: Show the help message.
 *   `/sw start`: ▶️ Start/resume the stopwatch.
 *   `/timer MM:SS` or `/timer SS`: ⏳ Start a countdown timer.
 *   `/stop`: ⏸️ Pause the stopwatch or timer.
