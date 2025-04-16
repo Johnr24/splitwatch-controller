@@ -27,8 +27,10 @@ telegram_app: Application = None
 def update_display(formatted_time: str):
     """Callback function passed to the Timer to update MQTT."""
     if mqtt_handler:
-        logger.debug(f"Sending to MQTT: {formatted_time}")
-        mqtt_handler.publish(formatted_time)
+        # Add two spaces prefix for the split-flap display formatting
+        payload = f"  {formatted_time}"
+        logger.debug(f"Sending to MQTT: '{payload}'") # Log the actual payload being sent
+        mqtt_handler.publish(payload)
     else:
         logger.warning("MQTT handler not initialized, cannot update display.")
 
