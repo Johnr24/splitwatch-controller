@@ -137,7 +137,7 @@ class Timer:
         logger.info("JobQueue instance received.")
         self.job_queue = job_queue
 
-    def start_stopwatch(self) -> str:
+    async def start_stopwatch(self) -> str: # Add async
         """Starts or resumes the stopwatch."""
         if self.mode == TimerMode.STOPWATCH or self.mode == TimerMode.TIMER:
              logger.warning(f"Cannot start/resume stopwatch, already running in mode: {self.mode.name}")
@@ -180,7 +180,7 @@ class Timer:
              return "Cannot start stopwatch due to unexpected state."
 
 
-    def start_timer(self, duration_seconds: float) -> str:
+    async def start_timer(self, duration_seconds: float) -> str: # Add async
         """Starts a *new* countdown timer. Requires timer to be stopped."""
         if self.mode != TimerMode.STOPPED:
             logger.warning(f"Cannot start timer, current mode is: {self.mode.name}. Use /reset first.")
@@ -273,7 +273,7 @@ class Timer:
         # Just return the current split time for now
         return f"Split: {formatted_split}"
 
-    def add_time(self, seconds_to_add: float) -> str:
+    async def add_time(self, seconds_to_add: float) -> str: # Add async
         """Adds time to the timer's target duration (timer mode only)."""
         if self.mode != TimerMode.TIMER:
             return "Can only add time in timer mode."
