@@ -63,6 +63,18 @@ async def update_display(formatted_time: str): # Make async
     else:
         logger.warning("MQTT handler not initialized, cannot update display.")
 
+
+# --- HA Status Update Callback ---
+async def _status_update_callback(new_mode: TimerMode):
+    """Publishes the new status to the HA status topic."""
+    if HA_MQTT_DISCOVERY_ENABLED and HA_STATUS_STATE_TOPIC and mqtt_handler:
+        status_payload = new_mode.name # e.g., "STOPPED", "RUNNING"
+        logger.info(f"Publishing HA Status: {status_payload} to {HA_STATUS_STATE_TOPIC}")
+        await mqtt_handler.publish(status_payload, topic=HA_STATUS_STATE_TOPIC)
+    else:
+        logger.debug("HA MQTT Discovery disabled or status topic/handler not available, skipping status publish.")
+
+
 # --- Display Formatting Logic ---
 def format_for_display(text: str) -> str:
     """Formats the text according to DISPLAY_WIDTH and DISPLAY_JUSTIFY."""
@@ -619,7 +631,7 @@ def main() -> None:
         loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(shutdown(s)))
 
     # --- Schedule Post-Connection Tasks (Discovery, Initial State) ---
-    async def run_post_connection_tasks(status_callback_func): # Add parameter
+    async def run_post_connection_tasks(status_callback_func, discovery_func): # Add discovery parameter
         # Add a delay to allow MQTT connection to establish
         # Adjust delay as needed based on network/broker speed
         connection_delay = 5
@@ -634,14 +646,14 @@ def main() -> None:
                  await status_callback_func(timer.mode) # Use parameter
                  await update_display(timer._format_time(0)) # Publish initial time "00:00:00"
              # Publish discovery messages
-             await publish_ha_discovery()
+             await discovery_func() # Use parameter
         else:
              logger.error("MQTT client not connected after delay. Skipping discovery publishing.")
 
     # Schedule the post-connection tasks to run in the background
     if HA_MQTT_DISCOVERY_ENABLED:
-        # Pass the actual callback function when creating the task
-        loop.create_task(run_post_connection_tasks(_status_update_callback))
+        # Pass the actual callback and discovery functions when creating the task
+        loop.create_task(run_post_connection_tasks(_status_update_callback, publish_ha_discovery))
 
     # --- Run the Bot ---
     logger.info("Starting Telegram Bot Polling...")
