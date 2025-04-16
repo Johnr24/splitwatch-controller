@@ -14,7 +14,7 @@ We take security seriously. If you discover a security vulnerability within this
 
 **Do NOT report security vulnerabilities through public GitHub issues.**
 
-Instead, please send an email to [your-security-contact-email@example.com] (replace with a real email address if desired, or specify another private contact method).
+Instead, please send an email to [security@shed.gay] (replace with a real email address if desired, or specify another private contact method).
 
 Please include the following details with your report:
 
