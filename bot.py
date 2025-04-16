@@ -153,6 +153,8 @@ async def publish_ha_discovery():
     global HA_MQTT_DISCOVERY_ENABLED, HA_MQTT_DISCOVERY_PREFIX, HA_MQTT_NODE_ID
     global HA_STATUS_STATE_TOPIC, HA_TIME_STATE_TOPIC, HA_COMMAND_TOPIC
     global HA_DEVICE_INFO, HA_SHELLY_SWITCH_ENTITY_ID, mqtt_handler
+    # Also declare command constants and json module as global
+    global CMD_START, CMD_STOP, CMD_RESET, CMD_SPLIT, CMD_PW_CYCLE, json
 
     if not HA_MQTT_DISCOVERY_ENABLED or not mqtt_handler:
         logger.info("HA MQTT Discovery is disabled or MQTT handler not ready.")
