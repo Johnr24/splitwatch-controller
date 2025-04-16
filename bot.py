@@ -31,8 +31,8 @@ AUTHORIZED_USER_IDS: set[int] = set() # Set of authorized user IDs
 HA_URL: Optional[str] = None # URL for Home Assistant instance
 HA_LLAT: Optional[str] = None # Long-Lived Access Token
 HA_AUTOMATION_ENTITY_ID: Optional[str] = None # Automation to control via API
-HA_SHELLY_SWITCH_ENTITY_ID: Optional[str] = None # Shelly switch control remains MQTT for now
-HA_SHELLY_SWITCH_COMMAND_TOPIC: Optional[str] = None
+HA_WEBHOOK_SHELLY_OFF: Optional[str] = None # Webhook ID for Shelly OFF
+HA_WEBHOOK_SHELLY_ON: Optional[str] = None # Webhook ID for Shelly ON
 initial_blanking_sent: bool = False # Flag to track if initial blanking message was sent
 
 # --- Constants ---
@@ -88,6 +88,26 @@ async def send_initial_blanking_message(): # Make async
         await mqtt_handler.publish(blank_message) # Await async publish
     else:
         logger.error("Cannot send initial blanking message: MQTT handler not ready.")
+
+# --- Home Assistant Webhook Trigger ---
+async def trigger_ha_webhook(webhook_id: str):
+    """Sends a POST request to a Home Assistant webhook."""
+    if not HA_URL or not webhook_id:
+        logger.debug("HA_URL or specific webhook_id not set, skipping webhook trigger.")
+        return
+
+    webhook_url = f"{HA_URL.rstrip('/')}/api/webhook/{webhook_id}"
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(webhook_url)
+            response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
+            logger.info(f"Successfully triggered Home Assistant webhook: {webhook_id}")
+    except httpx.RequestError as exc:
+        logger.error(f"Error sending webhook {webhook_id} to {webhook_url}: {exc}")
+    except httpx.HTTPStatusError as exc:
+        logger.error(f"Error response {exc.response.status_code} while sending webhook {webhook_id} to {webhook_url}: {exc.response.text}")
+    except Exception as e:
+        logger.error(f"An unexpected error occurred while triggering webhook {webhook_id}: {e}")
 
 # --- Home Assistant Service Call ---
 async def call_ha_service(domain: str, service: str, entity_id: Optional[str] = None):
@@ -238,36 +258,28 @@ async def power_cycle_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await unauthorized_reply(update)
         return
 
-    if not HA_SHELLY_SWITCH_COMMAND_TOPIC:
-        await update.message.reply_text("Power cycle feature not configured (Shelly switch entity ID missing).")
-        logger.warning("Attempted power cycle, but HA_SHELLY_SWITCH_COMMAND_TOPIC is not set.")
+    if not HA_URL or not HA_WEBHOOK_SHELLY_OFF or not HA_WEBHOOK_SHELLY_ON:
+        await update.message.reply_text("Power cycle feature not configured (HA_URL or Shelly webhook IDs missing).")
+        logger.warning("Attempted power cycle, but HA_URL, HA_WEBHOOK_SHELLY_OFF, or HA_WEBHOOK_SHELLY_ON is not set.")
         return
 
-    if not mqtt_handler or not mqtt_handler.client.is_connected():
-        await update.message.reply_text("Cannot power cycle: MQTT client not connected.")
-        logger.warning("Attempted power cycle, but MQTT client is not connected.")
-        return
+    # No need to check MQTT connection for this anymore
 
     try:
-        await update.message.reply_text("Attempting power cycle: Turning OFF...")
-        logger.info(f"Sending OFF command to Shelly switch: {HA_SHELLY_SWITCH_COMMAND_TOPIC}")
-        await mqtt_handler.publish(HA_SHELLY_SWITCH_COMMAND_TOPIC, "OFF") # Await async publish
+        await update.message.reply_text("Attempting power cycle: Triggering OFF webhook...")
+        logger.info(f"Triggering Shelly OFF webhook: {HA_WEBHOOK_SHELLY_OFF}")
+        await trigger_ha_webhook(HA_WEBHOOK_SHELLY_OFF)
 
-        # The publish method now includes a delay, so this extra sleep might
-        # make the total OFF time longer than 3 seconds (3s + publish_delay).
-        # Consider if the 3s should include the publish delay or be on top of it.
-        # Let's keep it simple for now: the total delay will be 3s + publish_delay.
         await asyncio.sleep(3) # Wait for 3 seconds
 
-        await update.message.reply_text("Power cycle: Turning ON...")
-        logger.info(f"Sending ON command to Shelly switch: {HA_SHELLY_SWITCH_COMMAND_TOPIC}")
-        await mqtt_handler.publish(HA_SHELLY_SWITCH_COMMAND_TOPIC, "ON") # Await async publish
+        await update.message.reply_text("Power cycle: Triggering ON webhook...")
+        logger.info(f"Triggering Shelly ON webhook: {HA_WEBHOOK_SHELLY_ON}")
+        await trigger_ha_webhook(HA_WEBHOOK_SHELLY_ON)
 
-        # The final message might appear slightly delayed due to the publish delay after ON command.
-        await update.message.reply_text("Power cycle sequence initiated.")
-        logger.info("Power cycle sequence completed.")
+        await update.message.reply_text("Power cycle sequence initiated via webhooks.")
+        logger.info("Power cycle sequence completed via webhooks.")
 
-    except Exception as e:
+    except Exception as e: # Catch potential errors from trigger_ha_webhook or sleep
         logger.error(f"Error during power cycle sequence: {e}")
         await update.message.reply_text(f"An error occurred during power cycle: {e}")
 
@@ -463,7 +475,7 @@ def main() -> None:
     """Start the bot."""
     global mqtt_handler, timer, telegram_app, DISPLAY_WIDTH, DISPLAY_JUSTIFY, AUTHORIZED_USER_IDS
     global HA_URL, HA_LLAT, HA_AUTOMATION_ENTITY_ID # REST API globals
-    global HA_SHELLY_SWITCH_ENTITY_ID, HA_SHELLY_SWITCH_COMMAND_TOPIC # Shelly MQTT globals
+    global HA_WEBHOOK_SHELLY_OFF, HA_WEBHOOK_SHELLY_ON # Shelly Webhook globals
 
     # --- Load Environment Variables ---
     load_dotenv()
@@ -524,19 +536,18 @@ def main() -> None:
         HA_LLAT = None
         HA_AUTOMATION_ENTITY_ID = None
 
-    # Load HA Shelly Switch MQTT config
-    HA_SHELLY_SWITCH_ENTITY_ID = os.getenv("HA_SHELLY_SWITCH_ENTITY_ID")
-    HA_MQTT_DISCOVERY_PREFIX = os.getenv("HA_MQTT_DISCOVERY_PREFIX", "homeassistant") # Default prefix for Shelly
-    if HA_SHELLY_SWITCH_ENTITY_ID:
-         # Derive Shelly Switch command topic (still uses MQTT)
-         # For switch: <prefix>/switch/<entity_id without domain>/state (using state for command based on user feedback)
-         entity_id_part = HA_SHELLY_SWITCH_ENTITY_ID.split('.')[-1]
-         HA_SHELLY_SWITCH_COMMAND_TOPIC = f"{HA_MQTT_DISCOVERY_PREFIX}/switch/{entity_id_part}/state" # Changed /set to /state
-         logger.info(f"HA Shelly Switch Control Enabled for: {HA_SHELLY_SWITCH_ENTITY_ID}")
-         logger.info(f"  Command Topic: {HA_SHELLY_SWITCH_COMMAND_TOPIC}")
-         # We don't need to subscribe to the Shelly state for this command
+    # Load HA Shelly Switch Webhook config
+    HA_WEBHOOK_SHELLY_OFF = os.getenv("HA_WEBHOOK_SHELLY_OFF")
+    HA_WEBHOOK_SHELLY_ON = os.getenv("HA_WEBHOOK_SHELLY_ON")
+    if HA_URL and HA_WEBHOOK_SHELLY_OFF and HA_WEBHOOK_SHELLY_ON:
+        logger.info("HA Shelly Switch Webhook Control Enabled.")
+        logger.info(f"  Webhook OFF: {HA_WEBHOOK_SHELLY_OFF}")
+        logger.info(f"  Webhook ON: {HA_WEBHOOK_SHELLY_ON}")
     else:
-        logger.info("HA Shelly Switch Control Disabled (HA_SHELLY_SWITCH_ENTITY_ID not set).")
+        logger.info("HA Shelly Switch Webhook Control Disabled (HA_URL, HA_WEBHOOK_SHELLY_OFF, or HA_WEBHOOK_SHELLY_ON not set).")
+        # Ensure all are None if not fully configured, HA_URL might still be needed for REST API
+        HA_WEBHOOK_SHELLY_OFF = None
+        HA_WEBHOOK_SHELLY_ON = None
 
 
     # --- Validate Environment Variables ---
