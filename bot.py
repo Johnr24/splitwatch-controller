@@ -619,7 +619,7 @@ def main() -> None:
         loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(shutdown(s)))
 
     # --- Schedule Post-Connection Tasks (Discovery, Initial State) ---
-    async def run_post_connection_tasks():
+    async def run_post_connection_tasks(status_callback_func): # Add parameter
         # Add a delay to allow MQTT connection to establish
         # Adjust delay as needed based on network/broker speed
         connection_delay = 5
@@ -631,7 +631,7 @@ def main() -> None:
              logger.info("MQTT likely connected. Publishing initial states and discovery...")
              # Publish initial states first
              if timer:
-                 await _status_update_callback(timer.mode) # Publish current status
+                 await status_callback_func(timer.mode) # Use parameter
                  await update_display(timer._format_time(0)) # Publish initial time "00:00:00"
              # Publish discovery messages
              await publish_ha_discovery()
@@ -640,7 +640,8 @@ def main() -> None:
 
     # Schedule the post-connection tasks to run in the background
     if HA_MQTT_DISCOVERY_ENABLED:
-        loop.create_task(run_post_connection_tasks())
+        # Pass the actual callback function when creating the task
+        loop.create_task(run_post_connection_tasks(_status_update_callback))
 
     # --- Run the Bot ---
     logger.info("Starting Telegram Bot Polling...")
