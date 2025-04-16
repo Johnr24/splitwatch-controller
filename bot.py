@@ -54,14 +54,25 @@ HELP_MESSAGE = (
 # --- MQTT Update Callback ---
 async def update_display(formatted_time: str): # Make async
     """Callback function passed to the Timer to format and update MQTT."""
-    global DISPLAY_WIDTH, DISPLAY_JUSTIFY # Access global config
+    global DISPLAY_WIDTH, DISPLAY_JUSTIFY # Access global config for formatting
+    global HA_MQTT_DISCOVERY_ENABLED, HA_TIME_STATE_TOPIC, mqtt_handler # Access globals for HA state
+    tasks = []
     if mqtt_handler:
-        # Format the time string using the configured width and justification
-        payload = format_for_display(formatted_time)
-        logger.debug(f"Sending to MQTT: '{payload}' (Justify: {DISPLAY_JUSTIFY}, Width: {DISPLAY_WIDTH})")
-        await mqtt_handler.publish(payload) # Await async publish
+        # 1. Update physical display
+        display_payload = format_for_display(formatted_time)
+        logger.debug(f"Sending to Display MQTT: '{display_payload}' (Justify: {DISPLAY_JUSTIFY}, Width: {DISPLAY_WIDTH})")
+        tasks.append(mqtt_handler.publish(display_payload)) # Publish to display topic
+
+        # 2. Update HA Time Sensor (if enabled)
+        if HA_MQTT_DISCOVERY_ENABLED and HA_TIME_STATE_TOPIC:
+            logger.debug(f"Sending to HA Time State MQTT: '{formatted_time}'")
+            # Publish raw time to HA state topic (no formatting needed)
+            tasks.append(mqtt_handler.publish(formatted_time, topic=HA_TIME_STATE_TOPIC))
+
+        if tasks:
+            await asyncio.gather(*tasks) # Run publishes concurrently
     else:
-        logger.warning("MQTT handler not initialized, cannot update display.")
+        logger.warning("MQTT handler not initialized, cannot update display or HA state.")
 
 
 # --- HA Status Update Callback ---
